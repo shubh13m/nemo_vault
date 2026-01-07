@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'dart:convert';
-import 'package:flutter/foundation.dart'; // REQUIRED for 'compute'
+import 'package:flutter/foundation.dart'; 
 import 'package:crypto/crypto.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:file_picker/file_picker.dart';
@@ -11,14 +11,22 @@ class VaultService {
   // 1. Holds the key in memory ONLY while the app is unlocked.
   static encrypt.Key? _currentKey;
 
-  // 2. Logic to turn your Passphrase into a 32-byte AES Key
+  // 2. The Staging Area (Cargo Bay) list
+  static final List<File> _stagingArea = [];
+
+  // 🔱 Safety flag to prevent auto-locking during System Dialogs (Picker/Biometrics)
+  static bool isSystemDialogActive = false;
+
+  static List<File> get stagingArea => List.unmodifiable(_stagingArea);
+
   static void initializeKey(String passphrase) {
     final bytes = utf8.encode(passphrase);
     final digest = sha256.convert(bytes);
     _currentKey = encrypt.Key(Uint8List.fromList(digest.bytes));
   }
 
-  // Helper to ensure we don't try to encrypt without a key
+  static bool isUnlocked() => _currentKey != null;
+
   static encrypt.Key _getKey() {
     if (_currentKey == null) {
       throw Exception("Vault is locked. No encryption key initialized.");
@@ -34,13 +42,9 @@ class VaultService {
     return dir;
   }
 
-  /// ✅ PERFORMANCE FIX: Decrypts data on a background thread (Isolate)
-  /// This prevents the UI from freezing on your SM A356E when scrolling
   static Future<Uint8List?> decryptFileData(File encryptedFile) async {
     try {
       final fileBytes = await encryptedFile.readAsBytes();
-      
-      // We use 'compute' to run the heavy math on a separate CPU core
       return await compute(_decryptWork, {
         'bytes': fileBytes,
         'key': _getKey(),
@@ -51,53 +55,76 @@ class VaultService {
     }
   }
 
-  /// Top-level helper function for background decryption
   static Uint8List _decryptWork(Map<String, dynamic> map) {
     final Uint8List fileBytes = map['bytes'];
     final encrypt.Key key = map['key'];
-
     final ivBytes = fileBytes.sublist(0, 12);
     final encryptedData = fileBytes.sublist(12);
-    
     final iv = encrypt.IV(ivBytes);
     final encrypter = encrypt.Encrypter(encrypt.AES(key, mode: encrypt.AESMode.gcm));
-
     final decrypted = encrypter.decryptBytes(encrypt.Encrypted(encryptedData), iv: iv);
     return Uint8List.fromList(decrypted);
   }
 
-  /// Encrypts a specific file from your "Staging Area"
   static Future<void> encryptAndStoreSpecific(File sourceFile) async {
     try {
       final bytes = await sourceFile.readAsBytes();
       final iv = encrypt.IV.fromSecureRandom(12);
-      
       final encrypter = encrypt.Encrypter(encrypt.AES(_getKey(), mode: encrypt.AESMode.gcm));
-      
       final encrypted = encrypter.encryptBytes(bytes, iv: iv);
       final combinedData = Uint8List.fromList(iv.bytes + encrypted.bytes);
-
       final dir = await _vaultDirectory;
       final fileName = p.basename(sourceFile.path);
       final encryptedFile = File(p.join(dir.path, '$fileName.nemo'));
-      
       await encryptedFile.writeAsBytes(combinedData);
+      _stagingArea.removeWhere((f) => f.path == sourceFile.path);
     } catch (e) {
       debugPrint("Encryption Error: $e");
       rethrow;
     }
   }
 
-  /// Existing logic for picking and storing immediately
+  // 🔱 Safe removal by file path
+  static void removeFromStaging(File file) {
+    _stagingArea.removeWhere((f) => f.path == file.path);
+    debugPrint("🔱 VaultService: Removed ${p.basename(file.path)}");
+  }
+
+  /// 🔱 FINALIZED: Picker logic for Android and Windows stability.
   static Future<bool> encryptAndStore() async {
     try {
-      FilePickerResult? result = await FilePicker.platform.pickFiles();
-      if (result != null && result.files.single.path != null) {
-        await encryptAndStoreSpecific(File(result.files.single.path!));
+      // STEP 1: Raise flag BEFORE any async gaps.
+      isSystemDialogActive = true; 
+      debugPrint("🔱 Safety Flag: Raised. Preventing seal for Picker.");
+
+      // STEP 2: The 50ms Sync Buffer. 
+      // This ensures the flag is registered in the app state BEFORE 
+      // Android switches focus to the File Picker activity.
+      await Future.delayed(const Duration(milliseconds: 50));
+      
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        allowMultiple: true,
+        type: FileType.any, 
+      );
+      
+      if (result != null) {
+        for (var path in result.paths) {
+          if (path != null) {
+            _stagingArea.add(File(path));
+          }
+        }
         return true;
       }
     } catch (e) {
-      debugPrint("Encryption Error: $e");
+      debugPrint("Picker Error: $e");
+    } finally {
+      // STEP 3: The 1200ms Cooldown Shield.
+      // We keep the flag raised while the app transitions from 'hidden' back to 'resumed'.
+      // This prevents a "delayed lock" from firing during the return animation.
+      Future.delayed(const Duration(milliseconds: 1200), () {
+        isSystemDialogActive = false;
+        debugPrint("🔱 Safety Flag: Lowered. Observer re-armed.");
+      });
     }
     return false;
   }
@@ -108,8 +135,17 @@ class VaultService {
     return dir.listSync();
   }
   
-  // Call this when logging out to wipe the key from memory
-  static void lockVault() {
+  static void deepSeal() {
     _currentKey = null;
+    _stagingArea.clear();
+    debugPrint("🔱 Abyss Protocol: RAM Purged. Staging Area Cleared.");
+  }
+
+  static void lockVault() => deepSeal();
+
+  // 🔱 Clear ONLY the staging area without locking the vault
+  static void clearStaging() {
+    _stagingArea.clear();
+    debugPrint("🔱 VaultService: Staging Area Purged.");
   }
 }

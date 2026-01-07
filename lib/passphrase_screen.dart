@@ -17,6 +17,9 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
   final TextEditingController _confirmController = TextEditingController();
   final TextEditingController _hintController = TextEditingController();
   
+  // 🔱 FIX: Added FocusNode to manually manage keyboard focus after biometric dialogs
+  final FocusNode _passphraseFocusNode = FocusNode();
+
   bool _isObscured = true;
   String _errorMessage = "";
   String? _savedHint;
@@ -28,6 +31,13 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
     if (!widget.isSetup) {
       _loadHint();
     }
+
+    // 🔱 FIX: Request focus after the first frame is rendered.
+    // This solves the Windows issue where the text field is visible but not "active"
+    // after returning from a system biometric prompt.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _passphraseFocusNode.requestFocus();
+    });
   }
 
   Future<void> _loadHint() async {
@@ -75,14 +85,22 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
         _navigateToDashboard();
       } else {
         setState(() => _errorMessage = "Incorrect Passphrase. Access Denied.");
+        // Re-focus on error so user can try again immediately
+        _passphraseFocusNode.requestFocus();
       }
     }
   }
 
+  /// 🔱 FIX: Added RouteSettings name 'dashboard'.
+  /// This tells the security logic in main.dart that we are now in 
+  /// a protected area so it knows when to trigger the lock screen.
   void _navigateToDashboard() {
     Navigator.pushReplacement(
       context, 
-      MaterialPageRoute(builder: (context) => const VaultDashboard())
+      MaterialPageRoute(
+        settings: const RouteSettings(name: 'dashboard'),
+        builder: (context) => const VaultDashboard(),
+      ),
     );
   }
 
@@ -91,6 +109,8 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
     _controller.dispose();
     _confirmController.dispose();
     _hintController.dispose();
+    // 🔱 FIX: Always dispose your focus nodes
+    _passphraseFocusNode.dispose();
     super.dispose();
   }
 
@@ -127,7 +147,6 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                           'assets/images/shield.png',
                           height: 80,
                           fit: BoxFit.contain,
-                          // Fallback to Icon if image is missing
                           errorBuilder: (context, error, stackTrace) => Icon(
                             widget.isSetup ? Icons.security : Icons.lock_open,
                             color: NemoPalette.electricBlue,
@@ -153,6 +172,7 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                         // Primary Passphrase Input
                         _buildTextField(
                           controller: _controller,
+                          focusNode: _passphraseFocusNode, // 🔱 FIX: Linked FocusNode
                           hint: widget.isSetup ? "Choose Passphrase..." : "Enter Passphrase...",
                           icon: Icons.vpn_key,
                           obscure: _isObscured,
@@ -226,10 +246,12 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
     required String hint,
     required IconData icon,
     required bool obscure,
+    FocusNode? focusNode, // 🔱 FIX: Added focusNode parameter
     VoidCallback? toggleObscure,
   }) {
     return TextField(
       controller: controller,
+      focusNode: focusNode, // 🔱 FIX: Attach the focus node here
       obscureText: obscure,
       style: const TextStyle(color: Colors.white),
       decoration: InputDecoration(

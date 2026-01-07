@@ -2,6 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'auth_service.dart';
 import 'passphrase_screen.dart';
+import 'inactivity_wrapper.dart';
+import 'session_observer.dart';
+import 'vault_service.dart';
+
+// --- Global Navigator Key for forced redirection ---
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class NemoPalette {
   static const Color electricBlue = Color(0xFF4DB6FF);
@@ -27,16 +33,60 @@ void main() {
   runApp(const NemoApp());
 }
 
-class NemoApp extends StatelessWidget {
+class NemoApp extends StatefulWidget {
   const NemoApp({super.key});
 
   @override
+  State<NemoApp> createState() => _NemoAppState();
+}
+
+class _NemoAppState extends State<NemoApp> {
+  late SessionObserver _sessionObserver;
+
+  @override
+  void initState() {
+    super.initState();
+    // 🔱 The observer triggers _sealVault on Pause/Hide
+    _sessionObserver = SessionObserver(onTriggerSeal: _sealVault);
+    WidgetsBinding.instance.addObserver(_sessionObserver);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(_sessionObserver);
+    super.dispose();
+  }
+
+  /// 🔱 The "Deep Seal" logic: Purges RAM and resets UI
+  void _sealVault() {
+    if (!VaultService.isUnlocked()) {
+      debugPrint("🔱 Nemo Vault: Memory already purged. Ignoring signal.");
+      return;
+    }
+
+    debugPrint("🔱 Nemo Vault: Emergency Seal Triggered. Wiping RAM.");
+    
+    // Purge key and staging area
+    VaultService.deepSeal();
+    
+    // Redirect to login screen
+    navigatorKey.currentState?.pushNamedAndRemoveUntil('entry', (route) => false);
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Nemo Vault',
-      theme: NemoPalette.theme,
-      home: const VaultEntry(),
+    return InactivityWrapper(
+      onInactivity: _sealVault, 
+      child: MaterialApp(
+        navigatorKey: navigatorKey,
+        debugShowCheckedModeBanner: false,
+        title: 'Nemo Vault',
+        theme: NemoPalette.theme,
+        initialRoute: 'entry',
+        routes: {
+          'entry': (context) => const VaultEntry(),
+        },
+      ),
     );
   }
 }
@@ -54,15 +104,26 @@ class _VaultEntryState extends State<VaultEntry> {
   Future<void> _unsealVault() async {
     bool authenticated = false;
     try {
+      // 🔱 Raise flag to prevent locking during biometric dialog
+      VaultService.isSystemDialogActive = true;
+
+      await Future.delayed(const Duration(milliseconds: 100));
+      
       authenticated = await auth.authenticate(
         localizedReason: 'Unsealing Nemo Vault',
         options: const AuthenticationOptions(
           stickyAuth: true,
-          biometricOnly: false,
+          biometricOnly: false, 
         ),
       );
     } catch (e) {
       debugPrint("Auth Error: $e");
+    } finally {
+      // 🔱 BUFFER: Wait 800ms before lowering flag.
+      // This allows the OS Focus to return fully so the app doesn't lock itself
+      // the moment the biometric window disappears.
+      await Future.delayed(const Duration(milliseconds: 800));
+      VaultService.isSystemDialogActive = false;
     }
 
     if (authenticated && mounted) {
@@ -71,6 +132,7 @@ class _VaultEntryState extends State<VaultEntry> {
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(
+            settings: const RouteSettings(name: 'passphrase'),
             builder: (context) => PassphraseScreen(isSetup: isFirstTime),
           ),
         );
@@ -84,14 +146,10 @@ class _VaultEntryState extends State<VaultEntry> {
     final double screenWidth = MediaQuery.of(context).size.width;
 
     return Scaffold(
-      body: SizedBox(
-        width: double.infinity,
-        height: double.infinity,
+      body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.center,
           children: [
-            // --- LOGO (Kept at 40% height) ---
             ConstrainedBox(
               constraints: BoxConstraints(
                 maxHeight: screenHeight * 0.40, 
@@ -109,20 +167,17 @@ class _VaultEntryState extends State<VaultEntry> {
                 },
               ),
             ),
-            
             const SizedBox(height: 50),
-
-            // --- RE-SIZED ACCESS BUTTON (Balanced) ---
             SizedBox(
-              width: 220, // Specific width so it's not full-screen
-              height: 54,  // Reduced from 65 to a comfortable touch size
+              width: 220,
+              height: 54,
               child: ElevatedButton(
                 onPressed: _unsealVault,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: NemoPalette.electricBlue,
                   foregroundColor: NemoPalette.systemSlate,
                   elevation: 3,
-                  shape: const StadiumBorder(), // Pill shape for a softer look
+                  shape: const StadiumBorder(),
                 ),
                 child: const Text(
                   "ACCESS VAULT",
