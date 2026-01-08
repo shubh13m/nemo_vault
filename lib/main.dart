@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'auth_service.dart';
@@ -5,6 +6,7 @@ import 'passphrase_screen.dart';
 import 'inactivity_wrapper.dart';
 import 'session_observer.dart';
 import 'vault_service.dart';
+import 'package:window_manager/window_manager.dart';
 
 // --- Global Navigator Key for forced redirection ---
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -28,8 +30,14 @@ class NemoPalette {
       );
 }
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // 🔱 Initialize Window Manager for Condition 5 (Windows Minimize)
+  if (Platform.isWindows) {
+    await windowManager.ensureInitialized();
+  }
+  
   runApp(const NemoApp());
 }
 
@@ -46,7 +54,7 @@ class _NemoAppState extends State<NemoApp> {
   @override
   void initState() {
     super.initState();
-    // 🔱 The observer triggers _sealVault on Pause/Hide
+    // 🔱 The observer triggers _sealVault on Pause/Hide/Minimize
     _sessionObserver = SessionObserver(onTriggerSeal: _sealVault);
     WidgetsBinding.instance.addObserver(_sessionObserver);
   }
@@ -54,45 +62,62 @@ class _NemoAppState extends State<NemoApp> {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(_sessionObserver);
+    // 🔱 Clean up native Windows listeners
+    _sessionObserver.dispose();
     super.dispose();
   }
 
-  /// 🔱 The "Deep Seal" logic: Purges RAM and resets UI
+  /// 🔱 THE MASTER SEAL: Forces UI reset and RAM purge.
   void _sealVault() {
-    if (!VaultService.isUnlocked()) {
-      debugPrint("🔱 Nemo Vault: Memory already purged. Ignoring signal.");
-      return;
-    }
+    debugPrint("🔱 Nemo Vault: Master Seal Triggered. Redirection sequence started.");
 
-    debugPrint("🔱 Nemo Vault: Emergency Seal Triggered. Wiping RAM.");
-    
-    // Purge key and staging area
+    // 1. Wipe RAM Keys and Staging Area (Idempotent: safe to call multiple times)
     VaultService.deepSeal();
     
-    // Redirect to login screen
-    navigatorKey.currentState?.pushNamedAndRemoveUntil('entry', (route) => false);
+    // 2. Check current route to prevent unnecessary "push" if already at Entry.
+    // We use navigatorKey to bypass context limitations in builder/observer.
+    bool isAlreadyAtEntry = false;
+    navigatorKey.currentState?.popUntil((route) {
+      if (route.settings.name == 'entry') isAlreadyAtEntry = true;
+      return true;
+    });
+
+    if (!isAlreadyAtEntry) {
+      debugPrint("🔱 Nemo Vault: Redirecting to Entry Screen.");
+      navigatorKey.currentState?.pushNamedAndRemoveUntil(
+        'entry', 
+        (route) => false,
+      );
+    } else {
+      debugPrint("🔱 Nemo Vault: Already at Entry. Skipping navigation.");
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return InactivityWrapper(
-      onInactivity: _sealVault, 
-      child: MaterialApp(
-        navigatorKey: navigatorKey,
-        debugShowCheckedModeBanner: false,
-        title: 'Nemo Vault',
-        theme: NemoPalette.theme,
-        initialRoute: 'entry',
-        routes: {
-          'entry': (context) => const VaultEntry(),
-        },
-      ),
+    return MaterialApp(
+      navigatorKey: navigatorKey,
+      debugShowCheckedModeBanner: false,
+      title: 'Nemo Vault',
+      theme: NemoPalette.theme,
+      // 🔱 THE WRAPPER: Handles the 1-minute idle countdown
+      builder: (context, child) {
+        return InactivityWrapper(
+          onInactivity: _sealVault,
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
+      initialRoute: 'entry',
+      routes: {
+        'entry': (context) => const VaultEntry(settings: RouteSettings(name: 'entry')),
+      },
     );
   }
 }
 
 class VaultEntry extends StatefulWidget {
-  const VaultEntry({super.key});
+  final RouteSettings? settings;
+  const VaultEntry({super.key, this.settings});
 
   @override
   State<VaultEntry> createState() => _VaultEntryState();
@@ -119,9 +144,7 @@ class _VaultEntryState extends State<VaultEntry> {
     } catch (e) {
       debugPrint("Auth Error: $e");
     } finally {
-      // 🔱 BUFFER: Wait 800ms before lowering flag.
-      // This allows the OS Focus to return fully so the app doesn't lock itself
-      // the moment the biometric window disappears.
+      // 🔱 Buffer allows biometric overlay to fully close before re-arming security
       await Future.delayed(const Duration(milliseconds: 800));
       VaultService.isSystemDialogActive = false;
     }

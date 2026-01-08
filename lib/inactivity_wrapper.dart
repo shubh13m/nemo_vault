@@ -2,8 +2,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'vault_service.dart';
 
-/// 🔱 Nemo Vault: Inactivity Wrapper
-/// Monitors user interaction. If the user is idle for [timeout], the vault seals.
+/// 🔱 Nemo Vault: Inactivity Wrapper (v5/5 Architecture)
+/// Monitors raw user interaction and OS-level suspension.
+/// 
+/// Satisfies:
+/// 1. 1-Minute Idle Lock: Seals vault after 60s of no input.
+/// 2. Background Awareness: Stops timer when app is fully minimized.
+/// 3. Focus-Smart: Prevents background mouse movement from resetting the timer.
+/// 4. Dialog Protection: Vetos lock if a File Picker or Biometric prompt is active.
 class InactivityWrapper extends StatefulWidget {
   final Widget child;
   final VoidCallback onInactivity;
@@ -13,27 +19,64 @@ class InactivityWrapper extends StatefulWidget {
     super.key,
     required this.child,
     required this.onInactivity,
-    this.timeout = const Duration(minutes: 5), // Default to 5 minutes
+    // 🔱 Project Specs: 1-minute inactivity timeout
+    this.timeout = const Duration(minutes: 1), 
   });
 
   @override
   State<InactivityWrapper> createState() => _InactivityWrapperState();
 }
 
-class _InactivityWrapperState extends State<InactivityWrapper> {
+class _InactivityWrapperState extends State<InactivityWrapper> with WidgetsBindingObserver {
   Timer? _timer;
 
   @override
   void initState() {
     super.initState();
+    // 🔱 Register lifecycle observer to coordinate with SessionObserver
+    WidgetsBinding.instance.addObserver(this);
     _startTimer();
   }
 
-  /// Resets the countdown. Called on every user interaction.
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    debugPrint("🔱 Nautilus Lifecycle: $state");
+
+    // 🔱 WINDOWS & ANDROID FIX: 
+    // We only cancel the timer on 'paused' or 'hidden' (App fully minimized).
+    // The timer KEEPS counting if the window is just 'inactive' (out of focus).
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
+      debugPrint("🔱 Nautilus Idle: App backgrounded. Suspending idle timer.");
+      _timer?.cancel();
+    } 
+    else if (state == AppLifecycleState.resumed) {
+      // 🔱 On resume, only restart if the vault hasn't been sealed by SessionObserver
+      if (VaultService.isUnlocked()) {
+        debugPrint("🔱 Nautilus Idle: App resumed. Resetting idle timer.");
+        _resetTimer();
+      }
+    }
+  }
+
+  /// Resets the countdown. Called on every physical interaction.
   void _resetTimer() {
-    // 🔱 SECURITY CHECK: 
-    // If the vault is already locked, don't bother restarting the timer.
+    // 🔱 SECURITY CHECK 1: If the vault is already locked, do not reset/restart.
     if (!VaultService.isUnlocked()) return;
+
+    // 🔱 SECURITY CHECK 2: FOCUS-SMART RESET
+    // If the app is INACTIVE (e.g., Windows user is clicking a browser), 
+    // hovering the mouse over the vault window should NOT reset the timer.
+    // This ensures that 'Focus Loss' eventually leads to a lock.
+    if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive) {
+      return; 
+    }
 
     if (_timer?.isActive ?? false) {
       _timer?.cancel();
@@ -43,33 +86,33 @@ class _InactivityWrapperState extends State<InactivityWrapper> {
 
   void _startTimer() {
     _timer = Timer(widget.timeout, () {
-      // 🔱 Before triggering inactivity, check if the user is 
-      // just busy in a system dialog (like picking a very large file).
+      // 🔱 SYSTEM DIALOG VETO: 
+      // Prevents locking while user is interacting with OS-level pickers.
       if (!VaultService.isSystemDialogActive) {
-        debugPrint("🔱 Nautilus Idle: Inactivity timeout reached. Executing Deep Seal.");
+        debugPrint("🔱 Nautilus Idle: 1-minute timeout reached. Executing Deep Seal.");
+        
+        // RAM WIPE: Immediately clear sensitive data from memory.
+        VaultService.deepSeal(); 
+        
+        // UI REDIRECT: Trigger the navigation logic defined in main.dart.
         widget.onInactivity();
       } else {
-        // If a dialog is active, give them one more 'timeout' cycle.
+        debugPrint("🔱 Nautilus Idle: Timeout reached, but Vetoed by System Dialog. Re-cycling.");
         _startTimer();
       }
     });
   }
 
   @override
-  void dispose() {
-    _timer?.cancel();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    // Listener captures raw pointer events on Windows/Android
+    // 🔱 Detects clicks, taps, moves, and scrolls globally.
     return Listener(
       behavior: HitTestBehavior.translucent,
       onPointerDown: (_) => _resetTimer(),
       onPointerMove: (_) => _resetTimer(),
-      onPointerHover: (_) => _resetTimer(), // 🔱 Added Hover for Windows Mouse support
+      onPointerHover: (_) => _resetTimer(), // Crucial for Windows Mouse support
       onPointerUp: (_) => _resetTimer(),
+      onPointerSignal: (_) => _resetTimer(), // Crucial for Mouse Scroll support
       child: widget.child,
     );
   }

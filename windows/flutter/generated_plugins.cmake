@@ -6,7 +6,9 @@ list(APPEND FLUTTER_PLUGIN_LIST
   desktop_screenstate
   flutter_secure_storage_windows
   local_auth_windows
+  screen_retriever
   secure_application
+  window_manager
 )
 
 list(APPEND FLUTTER_FFI_PLUGIN_LIST

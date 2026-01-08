@@ -22,11 +22,14 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 * **[x] v1.0.0.0: User-Defined Passphrase (SHA-256)**
 * *Details:* Replaces static keys with dynamic user input. The passphrase is hashed via SHA-256 to create a unique 32-byte key.
 
-* **[ ] v1.1.0.0: Auto-Lock on Background**
+* **[x] v1.1.0.0: Auto-Lock on Background**
 * *Details:* Monitors app lifecycle; if the app is minimized or the screen turns off, the vault "seals" (clears the key from memory) immediately.
 
-* **[ ] v1.2.0.0: Security "Destruct" Timer**
+* **[x] v1.2.0.0: Security "Destruct" Timer**
 * *Details:* Implements an exponential backoff for incorrect attempts. After X failed tries, the app locks for a set duration to prevent brute-force attacks.
+
+* **[x] v1.3.0.0: Inactivity "Idle Lock" Timer**
+* *Details:* Implements a high-precision countdown that monitors user interaction. If no physical input (touch, mouse move, or scroll) is detected for 60 seconds, the app executes a "Deep Seal"
 
 ### 🚢 Phase 2: The Core Workflow (Major Release v2.0.0)
 *Focus: The "Decompression Chamber" and file handling.*

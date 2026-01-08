@@ -7,6 +7,8 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
+/// 🔱 Nemo Vault: Core Security Service
+/// Manages the RAM-only Encryption Key and the Staging Area.
 class VaultService {
   // 1. Holds the key in memory ONLY while the app is unlocked.
   static encrypt.Key? _currentKey;
@@ -25,6 +27,7 @@ class VaultService {
     _currentKey = encrypt.Key(Uint8List.fromList(digest.bytes));
   }
 
+  // 🔱 Used by InactivityWrapper to decide if it should be counting
   static bool isUnlocked() => _currentKey != null;
 
   static encrypt.Key _getKey() {
@@ -43,6 +46,9 @@ class VaultService {
   }
 
   static Future<Uint8List?> decryptFileData(File encryptedFile) async {
+    // 🔱 Guard: If the vault was just sealed, abort immediately to prevent UI crashes
+    if (!isUnlocked()) return null;
+
     try {
       final fileBytes = await encryptedFile.readAsBytes();
       return await compute(_decryptWork, {
@@ -50,7 +56,8 @@ class VaultService {
         'key': _getKey(),
       });
     } catch (e) {
-      debugPrint("Decryption Error: $e");
+      // Catching the "Vault is locked" exception if it happens mid-compute
+      debugPrint("🔱 Decryption Halted: Vault was sealed during processing.");
       return null;
     }
   }
@@ -84,22 +91,17 @@ class VaultService {
     }
   }
 
-  // 🔱 Safe removal by file path
   static void removeFromStaging(File file) {
     _stagingArea.removeWhere((f) => f.path == file.path);
     debugPrint("🔱 VaultService: Removed ${p.basename(file.path)}");
   }
 
-  /// 🔱 FINALIZED: Picker logic for Android and Windows stability.
   static Future<bool> encryptAndStore() async {
     try {
-      // STEP 1: Raise flag BEFORE any async gaps.
       isSystemDialogActive = true; 
       debugPrint("🔱 Safety Flag: Raised. Preventing seal for Picker.");
 
-      // STEP 2: The 50ms Sync Buffer. 
-      // This ensures the flag is registered in the app state BEFORE 
-      // Android switches focus to the File Picker activity.
+      // Delay to ensure OS registers the app is still "active" before picker opens
       await Future.delayed(const Duration(milliseconds: 50));
       
       FilePickerResult? result = await FilePicker.platform.pickFiles(
@@ -118,10 +120,9 @@ class VaultService {
     } catch (e) {
       debugPrint("Picker Error: $e");
     } finally {
-      // STEP 3: The 1200ms Cooldown Shield.
-      // We keep the flag raised while the app transitions from 'hidden' back to 'resumed'.
-      // This prevents a "delayed lock" from firing during the return animation.
-      Future.delayed(const Duration(milliseconds: 1200), () {
+      // 🔱 Logic Fix: We use a slightly shorter buffer here but ensure it 
+      // ALWAYS clears, even if the user cancels the picker instantly.
+      Future.delayed(const Duration(milliseconds: 800), () {
         isSystemDialogActive = false;
         debugPrint("🔱 Safety Flag: Lowered. Observer re-armed.");
       });
@@ -135,15 +136,22 @@ class VaultService {
     return dir.listSync();
   }
   
+  /// 🔱 The Core Purge (Abyss Protocol)
+  /// Wipes the key from RAM and clears the staging area.
   static void deepSeal() {
-    _currentKey = null;
+    // SECURITY: Nullify the key immediately. 
+    // Dart's Garbage Collector will handle the memory cleanup.
+    _currentKey = null; 
     _stagingArea.clear();
-    debugPrint("🔱 Abyss Protocol: RAM Purged. Staging Area Cleared.");
+    
+    // Safety: Reset the system dialog flag so we don't stay "unlocked" by mistake
+    isSystemDialogActive = false;
+
+    debugPrint("🔱 Abyss Protocol: RAM Purged. Staging Area Cleared. Vault Sealed.");
   }
 
   static void lockVault() => deepSeal();
 
-  // 🔱 Clear ONLY the staging area without locking the vault
   static void clearStaging() {
     _stagingArea.clear();
     debugPrint("🔱 VaultService: Staging Area Purged.");

@@ -1,3 +1,4 @@
+import 'dart:async'; // Required for Timer
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'auth_service.dart';
@@ -16,28 +17,92 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
   final TextEditingController _controller = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
   final TextEditingController _hintController = TextEditingController();
-  
-  // 🔱 FIX: Added FocusNode to manually manage keyboard focus after biometric dialogs
   final FocusNode _passphraseFocusNode = FocusNode();
 
   bool _isObscured = true;
   String _errorMessage = "";
   String? _savedHint;
 
+  // Security state variables
+  Duration _lockoutRemaining = Duration.zero;
+  int _attemptsRemaining = 5;
+  Timer? _countdownTimer;
+
   @override
   void initState() {
     super.initState();
-    // If unlocking, load the hint from secure storage in the background
     if (!widget.isSetup) {
       _loadHint();
+      _checkLockoutStatus(); // Check security status immediately on load
     }
 
-    // 🔱 FIX: Request focus after the first frame is rendered.
-    // This solves the Windows issue where the text field is visible but not "active"
-    // after returning from a system biometric prompt.
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _passphraseFocusNode.requestFocus();
+      if (_lockoutRemaining == Duration.zero) {
+        _passphraseFocusNode.requestFocus();
+      }
     });
+  }
+
+  /// 🔱 Checks security status and triggers countdown if locked
+  Future<void> _checkLockoutStatus() async {
+    final remaining = await AuthService.getRemainingLockoutTime();
+    final failed = await AuthService.getFailedAttempts();
+
+    if (mounted) {
+      setState(() {
+        _lockoutRemaining = remaining;
+        
+        // 🔱 Logic: After 4 fails (1st lock), user is on their final shot
+        if (failed >= 4) {
+          _attemptsRemaining = 1;
+        } else {
+          _attemptsRemaining = 5 - failed;
+        }
+
+        // Show remaining attempts immediately if not locked
+        if (_lockoutRemaining == Duration.zero && failed > 0) {
+          _errorMessage = "$_attemptsRemaining attempts remaining.";
+        }
+      });
+
+      if (_lockoutRemaining > Duration.zero) {
+        _startCountdown();
+      }
+    }
+  }
+
+  /// 🔱 Logic to refresh UI the moment the timer hits zero
+  void _startCountdown() {
+    _countdownTimer?.cancel();
+    _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_lockoutRemaining.inSeconds > 0) {
+        setState(() {
+          _lockoutRemaining = _lockoutRemaining - const Duration(seconds: 1);
+        });
+      } else {
+        timer.cancel();
+        _handleLockoutLifted();
+      }
+    });
+  }
+
+  /// 🔱 Restoration logic: Re-enables UI and updates message
+  void _handleLockoutLifted() async {
+    final failed = await AuthService.getFailedAttempts();
+    if (mounted) {
+      setState(() {
+        _lockoutRemaining = Duration.zero;
+        if (failed >= 4) {
+          _attemptsRemaining = 1;
+          _errorMessage = "System restored. Final attempt remaining.";
+        } else {
+          _attemptsRemaining = 5 - failed;
+          _errorMessage = "System restored. $_attemptsRemaining attempts remaining.";
+        }
+      });
+      // Auto-focus the field so user can type immediately
+      _passphraseFocusNode.requestFocus();
+    }
   }
 
   Future<void> _loadHint() async {
@@ -48,12 +113,8 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
   }
 
   void _handleAction() async {
-    // 1. Force the keyboard to dismiss immediately
     FocusManager.instance.primaryFocus?.unfocus();
-
     String input = _controller.text.trim();
-    
-    // Reset error message
     setState(() => _errorMessage = "");
 
     if (input.isEmpty) {
@@ -65,7 +126,6 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
       String confirmInput = _confirmController.text.trim();
       String hintInput = _hintController.text.trim();
 
-      // Validation for Setup
       if (confirmInput.isEmpty || hintInput.isEmpty) {
         setState(() => _errorMessage = "Please fill all fields");
         return;
@@ -75,25 +135,41 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
         return;
       }
 
-      // Save everything via AuthService
       await AuthService.setupPassphrase(input, hintInput);
       _navigateToDashboard();
     } else {
-      // Logic for Unlocking
       bool success = await AuthService.verifyAndUnlock(input);
+      
       if (success) {
         _navigateToDashboard();
       } else {
-        setState(() => _errorMessage = "Incorrect Passphrase. Access Denied.");
-        // Re-focus on error so user can try again immediately
-        _passphraseFocusNode.requestFocus();
+        final failed = await AuthService.getFailedAttempts();
+        final lockout = await AuthService.getRemainingLockoutTime();
+
+        setState(() {
+          _lockoutRemaining = lockout;
+          
+          if (failed >= 4) {
+            _attemptsRemaining = 1;
+          } else {
+            _attemptsRemaining = 5 - failed;
+          }
+          
+          if (_lockoutRemaining > Duration.zero) {
+            _errorMessage = "Security breach protocol active.";
+            _startCountdown();
+          } else {
+            _errorMessage = "Incorrect Passphrase. $_attemptsRemaining attempts remaining.";
+          }
+        });
+
+        if (_lockoutRemaining == Duration.zero) {
+          _passphraseFocusNode.requestFocus();
+        }
       }
     }
   }
 
-  /// 🔱 FIX: Added RouteSettings name 'dashboard'.
-  /// This tells the security logic in main.dart that we are now in 
-  /// a protected area so it knows when to trigger the lock screen.
   void _navigateToDashboard() {
     Navigator.pushReplacement(
       context, 
@@ -106,21 +182,28 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
 
   @override
   void dispose() {
+    _countdownTimer?.cancel();
     _controller.dispose();
     _confirmController.dispose();
     _hintController.dispose();
-    // 🔱 FIX: Always dispose your focus nodes
     _passphraseFocusNode.dispose();
     super.dispose();
   }
 
+  String _formatDuration(Duration d) {
+    String minutes = d.inMinutes.toString().padLeft(2, '0');
+    String seconds = (d.inSeconds % 60).toString().padLeft(2, '0');
+    return "$minutes:$seconds";
+  }
+
   @override
   Widget build(BuildContext context) {
+    bool isUIEnabled = _lockoutRemaining <= Duration.zero;
+
     return Scaffold(
       backgroundColor: NemoPalette.systemSlate,
       body: Stack(
         children: [
-          // Background "Deep Sea" Glow
           Positioned(
             top: -100, right: -50,
             child: CircleAvatar(radius: 150, backgroundColor: NemoPalette.electricBlue.withOpacity(0.1)),
@@ -142,18 +225,16 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // --- SHIELD LOGO REPLACED ICON HERE ---
                         Image.asset(
                           'assets/images/shield.png',
                           height: 80,
                           fit: BoxFit.contain,
                           errorBuilder: (context, error, stackTrace) => Icon(
-                            widget.isSetup ? Icons.security : Icons.lock_open,
-                            color: NemoPalette.electricBlue,
+                            widget.isSetup ? Icons.security : (isUIEnabled ? Icons.lock_open : Icons.lock_clock),
+                            color: isUIEnabled ? NemoPalette.electricBlue : Colors.redAccent,
                             size: 50,
                           ),
                         ),
-                        // --------------------------------------
                         const SizedBox(height: 20),
                         Text(
                           widget.isSetup ? "INITIALIZE VAULT" : "SECURED ACCESS",
@@ -163,23 +244,24 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                         Text(
                           widget.isSetup 
                             ? "Set your secret phrase. Typos will lock you out forever!" 
-                            : "Enter your secret phrase to decrypt your files.",
+                            : (isUIEnabled 
+                                ? "Enter your secret phrase to decrypt your files."
+                                : "Security Lockdown: Please wait for timer."),
                           textAlign: TextAlign.center,
                           style: const TextStyle(color: Colors.white60, fontSize: 13),
                         ),
                         const SizedBox(height: 30),
                         
-                        // Primary Passphrase Input
                         _buildTextField(
                           controller: _controller,
-                          focusNode: _passphraseFocusNode, // 🔱 FIX: Linked FocusNode
-                          hint: widget.isSetup ? "Choose Passphrase..." : "Enter Passphrase...",
+                          focusNode: _passphraseFocusNode,
+                          hint: isUIEnabled ? (widget.isSetup ? "Choose Passphrase..." : "Enter Passphrase...") : "Locked out...",
                           icon: Icons.vpn_key,
                           obscure: _isObscured,
+                          enabled: isUIEnabled,
                           toggleObscure: () => setState(() => _isObscured = !_isObscured),
                         ),
 
-                        // Extra fields for SETUP mode
                         if (widget.isSetup) ...[
                           const SizedBox(height: 15),
                           _buildTextField(
@@ -187,6 +269,7 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                             hint: "Confirm Passphrase...",
                             icon: Icons.check_circle_outline,
                             obscure: _isObscured,
+                            enabled: true,
                           ),
                           const SizedBox(height: 15),
                           _buildTextField(
@@ -194,10 +277,10 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                             hint: "Security Hint (e.g. Pet name)",
                             icon: Icons.help_outline,
                             obscure: false,
+                            enabled: true,
                           ),
                         ],
 
-                        // Show hint if unlocking and hint exists
                         if (!widget.isSetup && _savedHint != null && _savedHint!.isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.only(top: 15),
@@ -210,22 +293,31 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                         if (_errorMessage.isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.only(top: 15),
-                            child: Text(_errorMessage, style: const TextStyle(color: Colors.redAccent, fontSize: 12)),
+                            child: Text(
+                              _errorMessage, 
+                              textAlign: TextAlign.center,
+                              style: TextStyle(color: isUIEnabled ? Colors.redAccent : Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.w500)
+                            ),
                           ),
 
                         const SizedBox(height: 30),
 
-                        // Action Button
                         ElevatedButton(
-                          onPressed: _handleAction,
+                          onPressed: isUIEnabled ? _handleAction : null,
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: NemoPalette.electricBlue,
+                            backgroundColor: isUIEnabled ? NemoPalette.electricBlue : Colors.white10,
                             minimumSize: const Size(double.infinity, 55),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
                           ),
                           child: Text(
-                            widget.isSetup ? "CREATE VAULT" : "OPEN VAULT",
-                            style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 16),
+                            isUIEnabled 
+                              ? (widget.isSetup ? "CREATE VAULT" : "OPEN VAULT") 
+                              : "RETRY IN ${_formatDuration(_lockoutRemaining)}",
+                            style: TextStyle(
+                              color: isUIEnabled ? Colors.black : Colors.white24, 
+                              fontWeight: FontWeight.bold, 
+                              fontSize: 16
+                            ),
                           ),
                         ),
                       ],
@@ -240,30 +332,31 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
     );
   }
 
-  // Helper to keep the build method clean
   Widget _buildTextField({
     required TextEditingController controller,
     required String hint,
     required IconData icon,
     required bool obscure,
-    FocusNode? focusNode, // 🔱 FIX: Added focusNode parameter
+    bool enabled = true,
+    FocusNode? focusNode,
     VoidCallback? toggleObscure,
   }) {
     return TextField(
       controller: controller,
-      focusNode: focusNode, // 🔱 FIX: Attach the focus node here
+      focusNode: focusNode,
       obscureText: obscure,
-      style: const TextStyle(color: Colors.white),
+      enabled: enabled,
+      style: TextStyle(color: enabled ? Colors.white : Colors.white24),
       decoration: InputDecoration(
         filled: true,
         fillColor: Colors.black26,
         hintText: hint,
         hintStyle: const TextStyle(color: Colors.white24, fontSize: 14),
-        prefixIcon: Icon(icon, color: Colors.white38, size: 20),
+        prefixIcon: Icon(icon, color: enabled ? Colors.white38 : Colors.white10, size: 20),
         suffixIcon: toggleObscure != null 
           ? IconButton(
-              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: Colors.white38, size: 20),
-              onPressed: toggleObscure,
+              icon: Icon(obscure ? Icons.visibility_off : Icons.visibility, color: enabled ? Colors.white38 : Colors.white10, size: 20),
+              onPressed: enabled ? toggleObscure : null,
             ) 
           : null,
         border: OutlineInputBorder(borderRadius: BorderRadius.circular(15), borderSide: BorderSide.none),
