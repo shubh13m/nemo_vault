@@ -16,7 +16,8 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 
 ## 🗺 Roadmap & Release Tracking
 
-### 🌊 Phase 1: The Foundation (Major Release v1.0.0)
+### Major Release v1.0
+### 🌊 Phase 1: The Foundation 
 *Focus: Establishing functional security and the "Submarine Hatch".*
 
 * **[x] v1.0.0.0: User-Defined Passphrase (SHA-256)**
@@ -31,7 +32,8 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 * **[x] v1.3.0.0: Inactivity "Idle Lock" Timer**
 * *Details:* Implements a high-precision countdown that monitors user interaction. If no physical input (touch, mouse move, or scroll) is detected for 60 seconds, the app executes a "Deep Seal"
 
-### 🚢 Phase 2: The Core Workflow (Major Release v2.0.0)
+### Major Release v2.0
+### 🚢 Phase 2: The Core Workflow 
 *Focus: The "Decompression Chamber" and file handling.*
 
 * **[ ] v2.1.0.0: Interactive Staging Area**
@@ -46,7 +48,8 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 * **[ ] v2.4.0.0: Separate Archive Panel**
 * *Details:* The "Gallery of Secrets." A secure viewing area where encrypted files are temporarily decrypted into memory for viewing.
 
-### ☁️ Phase 3: Portability & Cloud (Major Release v3.0.0)
+### Major Release v3.0
+### ☁️ Phase 3: Portability & Cloud
 *Focus: Ensuring data survival across the "Deep Sea".*
 
 * **[ ] v3.1.0.0: Google Drive Integration**
@@ -55,7 +58,8 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 * **[ ] v3.2.0.0: Universal Decryptor & Cloud Import**
 * *Details:* Allows users to pull files from the cloud onto a new device. As long as they have their secret phrase, they can "resurface" their data anywhere.
 
-### 📊 Phase 4: Intelligence & Insights (Major Release v4.0.0)
+### Major Release v4.0
+### 📊 Phase 4: Intelligence & Insights
 *Focus: Data visualization and vault health.*
 
 * **[ ] v4.1.0.0: Dashboard Stats**
@@ -67,7 +71,8 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 * **[ ] v4.3.0.0: Automatic File Categorization**
 * *Details:* Uses file signatures to automatically sort imports into Photos, Documents, and Videos within the Archive Panel.
 
-### 🎭 Phase 5: Elite Stealth & Cosmetics (Major Release v5.0.0)
+### Major Release v5.0
+### 🎭 Phase 5: Elite Stealth & Cosmetics
 *Focus: The "Ghost Submarine" aesthetic and panic features.*
 
 * **[ ] v5.1.0.0: "Decoy Vault" (Panic Feature)**
