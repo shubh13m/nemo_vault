@@ -36,10 +36,10 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 ### 🚢 Phase 2: The Core Workflow 
 *Focus: The "Decompression Chamber" and file handling.*
 
-* **[ ] v2.1.0.0: Interactive Staging Area**
+* **[x] v2.1.0.0: Interactive Staging Area**
 * *Details:* A "Cargo Bay" UI where users drag or pick files. Features a multi-pick grid with **Red [X]** icons to remove files before they are committed to the abyss.
 
-* **[ ] v2.2.0.0: "VAULT LOCK" Bulk Action**
+* **[x] v2.2.0.0: "VAULT LOCK" Bulk Action**
 * *Details:* The heavy-lifting engine. Processes all staged files through Background Isolates to encrypt them simultaneously without freezing the UI.
 
 * **[ ] v2.3.0.0: "Clean Sweep" Logic**
