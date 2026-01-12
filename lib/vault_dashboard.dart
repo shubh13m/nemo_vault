@@ -2,9 +2,13 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import 'package:permission_handler/permission_handler.dart';
+
+// 🔱 Flattened Imports (Matches your /lib structure)
 import 'vault_service.dart';
-import 'main.dart'; 
-import 'package:path_provider/path_provider.dart';
+import 'isolate_manager.dart';
+import 'staged_item.dart';
+import 'main.dart';
 
 class VaultDashboard extends StatefulWidget {
   const VaultDashboard({super.key});
@@ -13,28 +17,71 @@ class VaultDashboard extends StatefulWidget {
   State<VaultDashboard> createState() => _VaultDashboardState();
 }
 
-class _VaultDashboardState extends State<VaultDashboard> {
-  late Future<List<FileSystemEntity>> _fileList;
-  final List<File> _stagedFiles = []; 
-  
-  // 🔱 Windows/Desktop Scroll Control
+/// 🔱 Added WidgetsBindingObserver to handle the Inactivity Lockout Fix
+class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObserver {
+  late Future<List<FileSystemEntity>> _fileList = VaultService.listEncryptedFiles();
+  final List<StagedItem> _stagedFiles = [];
   final ScrollController _stagingScrollController = ScrollController();
 
-  // 🔱 Loading & Success States
   bool _isCommitting = false;
-  bool _showSuccess = false; 
+  bool _showSuccess = false;
   int _totalToCommit = 0;
   int _currentCommit = 0;
+  String _currentlyProcessing = ""; 
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this); // 🔱 Monitor App Lifecycle
+    _initVault();
+  }
+
+  void _initVault() async {
+    await IsolateManager.start();
+    _checkPermissions();
+    _listenToProgress();
     _refreshFiles();
-    findMyPhotos();
+  }
+
+  /// 🔱 VETO LOCK LOGIC: Synchronized with VaultService & InactivityWrapper
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    debugPrint("🔱 Dashboard Lifecycle: $state");
+    
+    // 🔱 Logic Barrier: If we are encrypting OR picking files, do NOT lock.
+    // We now check VaultService.isSystemDialogActive for the File Picker veto.
+    if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
+      if (VaultService.isProcessing || VaultService.isSystemDialogActive) {
+        debugPrint("🔱 Security Bypass: Vetoing auto-lock (Processing: ${VaultService.isProcessing}, DialogActive: ${VaultService.isSystemDialogActive})");
+        return;
+      }
+
+      // Standard Auto-Lock: Wipe RAM and navigate to Entry
+      if (VaultService.isUnlocked()) {
+        _forceLockout();
+      }
+    }
+  }
+
+  void _forceLockout() {
+    VaultService.lockVault();
+    if (mounted) {
+      Navigator.pushReplacementNamed(context, 'entry');
+    }
+  }
+
+  void _checkPermissions() async {
+    if (Platform.isAndroid) {
+      var status = await Permission.manageExternalStorage.status;
+      if (!status.isGranted) {
+        await Permission.manageExternalStorage.request();
+      }
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this); // 🔱 Cleanup observer
     _stagingScrollController.dispose();
     super.dispose();
   }
@@ -45,12 +92,39 @@ class _VaultDashboardState extends State<VaultDashboard> {
     });
   }
 
-  // 🔱 Scroll Helper for Mouse/Windows Users
+  void _listenToProgress() {
+    IsolateManager.progressStream.listen((data) {
+      if (!mounted) return;
+      
+      final String? id = data['id'];
+      final String? status = data['status'];
+      
+      setState(() {
+        if (status == 'encrypting' && id != null) {
+          if (_stagedFiles.any((e) => e.id == id)) {
+            final item = _stagedFiles.firstWhere((e) => e.id == id);
+            _currentlyProcessing = item.fileName;
+          }
+        }
+
+        if (status == 'sealed' && id != null) {
+          _currentCommit++;
+          if (_currentCommit >= _totalToCommit && _isCommitting) {
+            _finalizeCommit();
+          }
+        }
+
+        if (status == 'error') {
+          debugPrint("🔱 Isolate Error: ${data['message']}");
+        }
+      });
+    });
+  }
+
   void _scrollStagingArea(bool forward) {
     if (!_stagingScrollController.hasClients) return;
-    double scrollOffset = 220.0; 
+    double scrollOffset = 220.0;
     double target = _stagingScrollController.offset + (forward ? scrollOffset : -scrollOffset);
-    
     _stagingScrollController.animateTo(
       target.clamp(0.0, _stagingScrollController.position.maxScrollExtent),
       duration: const Duration(milliseconds: 400),
@@ -58,56 +132,58 @@ class _VaultDashboardState extends State<VaultDashboard> {
     );
   }
 
-  // 🔱 Clear Staging Confirmation with Service Sync
-  void _confirmClearStaging() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: NemoPalette.systemSlate,
-        title: const Text("PURGE STAGING AREA?", 
-          style: TextStyle(color: Colors.white, fontSize: 16, letterSpacing: 1, fontWeight: FontWeight.bold)),
-        content: const Text("This will remove all selected files from the buffer. Original files will not be deleted.",
-          style: TextStyle(color: Colors.white70, fontSize: 13)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("CANCEL", style: TextStyle(color: Colors.white38)),
-          ),
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _stagedFiles.clear(); 
-                VaultService.clearStaging(); // 🔱 FIX: Clear the Service-level list!
-              });
-              Navigator.pop(context);
-            },
-            child: const Text("PURGE ALL", style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _logout() {
-    VaultService.lockVault(); 
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        settings: const RouteSettings(name: 'entry'),
-        builder: (context) => const VaultEntry(),
-      ),
-      (route) => false, 
-    );
-  }
-
+  /// 🔱 Updated to use the Global Veto Protection in VaultService
   void _pickFiles() async {
-    bool success = await VaultService.encryptAndStore();
+    // 🔱 Raise the Veto flag BEFORE the OS dialog opens
+    setState(() => VaultService.isSystemDialogActive = true); 
+
+    try {
+      bool success = await VaultService.encryptAndStore();
+      if (success && mounted) {
+        setState(() {
+          _stagedFiles.clear();
+          _stagedFiles.addAll(VaultService.stagingArea);
+        });
+      }
+    } finally {
+      // 🔱 Small delay allows the OS to fully return focus to the app 
+      // before we re-enable security lockout checks.
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (mounted) {
+        setState(() => VaultService.isSystemDialogActive = false); // Lower Veto flag
+      }
+    }
+  }
+
+  Future<void> _handleVaultLock() async {
+    if (_stagedFiles.isEmpty) return;
+
+    setState(() {
+      _isCommitting = true;
+      _showSuccess = false;
+      _totalToCommit = _stagedFiles.length;
+      _currentCommit = 0;
+      _currentlyProcessing = "Initializing Abyss...";
+    });
+
+    IsolateManager.processVaultLock(_stagedFiles, VaultService.activeKey ?? "MEM_KEY_ACTIVE");
+  }
+
+  void _finalizeCommit() async {
+    VaultService.clearStaging();
     
-    if (success && mounted) {
-      setState(() {
-        _stagedFiles.clear();
-        _stagedFiles.addAll(VaultService.stagingArea);
-      });
-      debugPrint("🔱 Dashboard: Staging Area synced.");
+    setState(() {
+      _isCommitting = false;
+      _showSuccess = true;
+      _stagedFiles.clear(); 
+      _currentlyProcessing = "";
+    });
+
+    await Future.delayed(const Duration(milliseconds: 1500));
+    
+    if (mounted) {
+      setState(() => _showSuccess = false);
+      _refreshFiles();
     }
   }
 
@@ -116,15 +192,14 @@ class _VaultDashboardState extends State<VaultDashboard> {
     return Scaffold(
       backgroundColor: NemoPalette.systemSlate,
       appBar: AppBar(
-        title: const Text("NEMO VAULT", 
-          style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.bold, color: Colors.white)),
+        title: const Text("NEMO VAULT",
+            style: TextStyle(letterSpacing: 3, fontWeight: FontWeight.bold, color: Colors.white)),
         backgroundColor: NemoPalette.deepOcean,
         centerTitle: true,
-        elevation: 0,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout, color: Colors.redAccent),
-            onPressed: (_isCommitting || _showSuccess) ? null : _logout,
+            onPressed: (_isCommitting || _showSuccess) ? null : _forceLockout,
           )
         ],
       ),
@@ -132,335 +207,209 @@ class _VaultDashboardState extends State<VaultDashboard> {
         children: [
           Column(
             children: [
-              _buildStatsHeader(), 
-              
+              _buildStatsHeader(),
               if (_stagedFiles.isNotEmpty) _buildStagingArea(),
-        
               Expanded(
-                child: FutureBuilder<List<FileSystemEntity>>(
-                  future: _fileList,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator(color: NemoPalette.electricBlue));
-                    }
-        
-                    final files = snapshot.data ?? [];
-                    if (files.isEmpty && _stagedFiles.isEmpty) {
-                      return _buildEmptyState();
-                    }
-        
-                    return ListView.builder(
-                      padding: const EdgeInsets.all(16),
-                      itemCount: files.length,
-                      itemBuilder: (context, index) {
-                        final file = files[index] as File;
-                        final fileName = p.basename(file.path).replaceAll('.nemo', '');
-        
-                        return Card(
-                          color: NemoPalette.deepOcean,
-                          margin: const EdgeInsets.only(bottom: 12),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          child: ListTile(
-                            leading: _buildEncryptedThumbnail(file),
-                            title: Text(fileName, style: const TextStyle(color: Colors.white, fontSize: 14)),
-                            subtitle: const Text("SECURED", style: TextStyle(color: Colors.white24, fontSize: 10)),
-                            onTap: () => _showPreview(file),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline, color: Colors.white30, size: 20),
-                              onPressed: () => (_isCommitting || _showSuccess) ? null : _confirmDelete(file),
-                            ),
-                          ),
-                        );
-                      },
-                    );
-                  },
-                ),
+                child: _buildVaultList(),
               ),
             ],
           ),
-
           if (_isCommitting || _showSuccess) _buildLoadingOverlay(),
         ],
       ),
-      floatingActionButton: (_isCommitting || _showSuccess) 
-        ? null 
-        : FloatingActionButton.extended(
-            backgroundColor: NemoPalette.electricBlue,
-            onPressed: _pickFiles,
-            label: const Text("SELECT FILES", 
-              style: TextStyle(color: NemoPalette.systemSlate, fontWeight: FontWeight.bold)),
-            icon: const Icon(Icons.add_photo_alternate, color: NemoPalette.systemSlate),
-          ),
+      floatingActionButton: (_isCommitting || _showSuccess)
+          ? null
+          : FloatingActionButton.extended(
+              backgroundColor: NemoPalette.electricBlue,
+              onPressed: _pickFiles,
+              label: const Text("SELECT FILES", style: TextStyle(color: NemoPalette.systemSlate, fontWeight: FontWeight.bold)),
+              icon: const Icon(Icons.add_circle_outline, color: NemoPalette.systemSlate),
+            ),
     );
   }
 
-  // --- 🔱 UPDATED INTERACTIVE STAGING AREA ---
+  // --- UI COMPONENTS ---
+
+  Widget _buildVaultList() {
+    return FutureBuilder<List<FileSystemEntity>>(
+      future: _fileList,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator(color: NemoPalette.electricBlue));
+        }
+        final files = snapshot.data ?? [];
+        if (files.isEmpty && _stagedFiles.isEmpty) return _buildEmptyState();
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(16),
+          itemCount: files.length,
+          itemBuilder: (context, index) {
+            final file = files[index] as File;
+            final fileName = p.basename(file.path).replaceAll('.nemo', '');
+            return Card(
+              color: NemoPalette.deepOcean,
+              margin: const EdgeInsets.only(bottom: 12),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.white10,
+                  child: Icon(Icons.lock_outline, color: NemoPalette.electricBlue, size: 20),
+                ),
+                title: Text(fileName, style: const TextStyle(color: Colors.white, fontSize: 14)),
+                subtitle: const Text("ENCRYPTED ABYSS FILE", style: TextStyle(color: Colors.white24, fontSize: 10)),
+                trailing: IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.white30),
+                  onPressed: () => _confirmDelete(file),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 
   Widget _buildStagingArea() {
-    // 🔱 Check for Windows to show navigation arrows
-    bool isWindows = Platform.isWindows;
-
     return Container(
-      height: 235, 
+      height: 260,
       padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 🔱 HEADER: Title (Left) and Count Tag (Right)
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text("STAGING AREA", 
-                  style: TextStyle(color: NemoPalette.electricBlue, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 1)),
-                
-                // 🔱 File Count Badge (Moved to Right)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: NemoPalette.electricBlue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(4),
-                    border: Border.all(color: NemoPalette.electricBlue.withOpacity(0.3))
-                  ),
-                  child: Text(
-                    "${_stagedFiles.length} FILES SELECTED", 
-                    style: const TextStyle(color: NemoPalette.electricBlue, fontSize: 9, fontWeight: FontWeight.bold)
-                  ),
-                ),
+                const Text("CARGO BAY / STAGING",
+                    style: TextStyle(color: NemoPalette.electricBlue, fontWeight: FontWeight.bold, fontSize: 11)),
+                _buildGhostToggle(),
               ],
             ),
           ),
-
-          // 🔱 LIST AREA
           Expanded(
             child: Row(
               children: [
-                if (isWindows)
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white24, size: 18),
-                    onPressed: () => _scrollStagingArea(false),
-                  ),
-                
+                if (Platform.isWindows)
+                  IconButton(icon: const Icon(Icons.arrow_back_ios, color: Colors.white24), onPressed: () => _scrollStagingArea(false)),
                 Expanded(
                   child: ListView.builder(
                     controller: _stagingScrollController,
                     scrollDirection: Axis.horizontal,
-                    physics: const BouncingScrollPhysics(),
                     itemCount: _stagedFiles.length,
-                    itemBuilder: (context, index) {
-                      final file = _stagedFiles[index];
-                      final fileName = p.basename(file.path);
-
-                      return Container(
-                        width: 110,
-                        margin: const EdgeInsets.only(right: 12),
-                        child: Column(
-                          children: [
-                            Stack(
-                              children: [
-                                Container(
-                                  height: 100, width: 110,
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(color: Colors.white10),
-                                    image: DecorationImage(image: FileImage(file), fit: BoxFit.cover),
-                                  ),
-                                ),
-                                Positioned(
-                                  top: 5, right: 5,
-                                  child: GestureDetector(
-                                    // Locate this inside your ListView.builder inside _buildStagingArea
-                                    onTap: (_isCommitting || _showSuccess) 
-                                      ? null 
-                                      : () => setState(() {
-                                          // 🔱 Identify the file first
-                                          final fileToRemove = _stagedFiles[index];
-                                          
-                                          // 🔱 Remove from Service FIRST using the object, not index
-                                          VaultService.removeFromStaging(fileToRemove);
-                                          
-                                          // 🔱 Then remove from UI list
-                                          _stagedFiles.removeAt(index);
-                                        }),
-                                    child: const CircleAvatar(
-                                      radius: 12, backgroundColor: Colors.black87,
-                                      child: Icon(Icons.close, size: 14, color: Colors.white),
-                                    ),
-                                  ),
-                                )
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              fileName, 
-                              style: const TextStyle(color: Colors.white70, fontSize: 10), 
-                              maxLines: 1, 
-                              overflow: TextOverflow.ellipsis, 
-                            ),
-                          ],
-                        ),
-                      );
-                    },
+                    itemBuilder: (context, index) => _buildStagedCard(_stagedFiles[index], index),
                   ),
                 ),
-
-                if (isWindows)
-                  IconButton(
-                    icon: const Icon(Icons.arrow_forward_ios, color: Colors.white24, size: 18),
-                    onPressed: () => _scrollStagingArea(true),
-                  ),
+                if (Platform.isWindows)
+                  IconButton(icon: const Icon(Icons.arrow_forward_ios, color: Colors.white24), onPressed: () => _scrollStagingArea(true)),
               ],
             ),
           ),
-
-          // 🔱 BOTTOM ACTIONS: Clear All and Commit moved to Bottom Right
-          Padding(
-            padding: const EdgeInsets.only(right: 12, bottom: 8, top: 4),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton.icon(
-                  onPressed: (_isCommitting || _showSuccess) ? null : _confirmClearStaging,
-                  icon: const Icon(Icons.layers_clear, size: 14, color: Colors.redAccent),
-                  label: const Text("CLEAR ALL", 
-                    style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.greenAccent.withOpacity(0.1),
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    side: const BorderSide(color: Colors.greenAccent, width: 0.5),
-                  ),
-                  onPressed: (_isCommitting || _showSuccess) ? null : _handleVaultCommit,
-                  icon: const Icon(Icons.security, size: 16, color: Colors.greenAccent),
-                  label: const Text("COMMIT", 
-                    style: TextStyle(color: Colors.greenAccent, fontWeight: FontWeight.bold, fontSize: 11)),
-                ),
-              ],
-            ),
-          ),
-          const Divider(color: Colors.white10, height: 1),
+          _buildStagingActions(),
         ],
       ),
     );
   }
 
-  // --- 🔱 LOADING & SUCCESS OVERLAY ---
-
-  Widget _buildLoadingOverlay() {
-    double progress = _totalToCommit > 0 ? _currentCommit / _totalToCommit : 0;
-    
+  Widget _buildStagedCard(StagedItem item, int index) {
     return Container(
-      color: Colors.black.withOpacity(0.9),
-      width: double.infinity,
-      height: double.infinity,
-      child: Center(
-        child: AnimatedSwitcher(
-          duration: const Duration(milliseconds: 600),
-          transitionBuilder: (Widget child, Animation<double> animation) {
-            return FadeTransition(opacity: animation, child: ScaleTransition(scale: animation, child: child));
-          },
-          child: _showSuccess 
-            ? _buildSuccessView() 
-            : _buildProgressView(progress),
-        ),
+      width: 130,
+      margin: const EdgeInsets.only(right: 12),
+      decoration: BoxDecoration(
+        color: NemoPalette.deepOcean.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white10),
+      ),
+      child: Stack(
+        children: [
+          Column(
+            children: [
+              Expanded(child: _buildTypeSpecificPreview(item)),
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(item.fileName, style: const TextStyle(color: Colors.white, fontSize: 10), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    Text(item.readableSize, style: const TextStyle(color: Colors.white38, fontSize: 9)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Positioned(
+            top: 5, right: 5,
+            child: GestureDetector(
+              onTap: () => setState(() {
+                VaultService.removeFromStaging(item);
+                _stagedFiles.removeAt(index);
+              }),
+              child: const CircleAvatar(radius: 10, backgroundColor: Colors.black54, child: Icon(Icons.close, size: 12, color: Colors.white)),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildProgressView(double progress) {
-    return Column(
-      key: const ValueKey("progress_view"),
-      mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildTypeSpecificPreview(StagedItem item) {
+    switch (item.fileType) {
+      case NemoFileType.image:
+        return ClipRRect(
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+          child: Image.file(item.file, fit: BoxFit.cover, width: double.infinity, cacheWidth: 200),
+        );
+      case NemoFileType.video:
+        return const Center(child: Icon(Icons.play_circle_outline, color: Colors.white30, size: 40));
+      case NemoFileType.document:
+        return const Center(child: Icon(Icons.description_outlined, color: NemoPalette.electricBlue, size: 40));
+      default:
+        return const Center(child: Icon(Icons.insert_drive_file_outlined, color: Colors.white10, size: 40));
+    }
+  }
+
+  Widget _buildGhostToggle() {
+    return Row(
       children: [
-        const CircularProgressIndicator(color: NemoPalette.electricBlue, strokeWidth: 2),
-        const SizedBox(height: 24),
-        const Text("COMMITTING TO ABYSS", 
-          style: TextStyle(color: Colors.white, letterSpacing: 2, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        Text("Securing $_currentCommit of $_totalToCommit files...", 
-          style: const TextStyle(color: Colors.white54, fontSize: 12)),
-        const SizedBox(height: 25),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 50),
-          child: Column(
-            children: [
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  backgroundColor: Colors.white10,
-                  color: NemoPalette.electricBlue,
-                  minHeight: 8,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text("${(progress * 100).toInt()}%", 
-                style: const TextStyle(color: NemoPalette.electricBlue, fontSize: 12, fontWeight: FontWeight.bold)),
-            ],
+        const Icon(Icons.auto_fix_high, size: 14, color: Colors.white38),
+        const SizedBox(width: 4),
+        const Text("GHOST STRIP", style: TextStyle(color: Colors.white38, fontSize: 9)),
+        Transform.scale(
+          scale: 0.7,
+          child: Switch(
+            value: _stagedFiles.isNotEmpty && _stagedFiles.first.shouldStripMetadata,
+            onChanged: (val) => setState(() {
+              for (var item in _stagedFiles) {
+                item.shouldStripMetadata = val;
+              }
+            }),
+            activeThumbColor: NemoPalette.electricBlue,
           ),
         ),
       ],
     );
   }
 
-  Widget _buildSuccessView() {
-    return const Column(
-      key: ValueKey("success_view"),
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 100),
-        SizedBox(height: 24),
-        Text("VAULT SEALED", 
-          style: TextStyle(color: Colors.white, letterSpacing: 4, fontWeight: FontWeight.bold, fontSize: 20)),
-        SizedBox(height: 8),
-        Text("Original files have been purged.", 
-          style: TextStyle(color: Colors.white54, fontSize: 13)),
-      ],
+  Widget _buildStagingActions() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          TextButton(
+            onPressed: () => setState(() { _stagedFiles.clear(); VaultService.clearStaging(); }),
+            child: const Text("PURGE ALL", style: TextStyle(color: Colors.redAccent, fontSize: 11)),
+          ),
+          const SizedBox(width: 10),
+          ElevatedButton.icon(
+            onPressed: _handleVaultLock,
+            icon: const Icon(Icons.lock, size: 14),
+            label: const Text("COMMIT TO ABYSS", style: TextStyle(fontSize: 11)),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.greenAccent.withOpacity(0.2), foregroundColor: Colors.greenAccent),
+          ),
+        ],
+      ),
     );
   }
-
-  Future<void> _handleVaultCommit() async {
-    final targets = List<File>.from(_stagedFiles);
-    
-    setState(() {
-      _isCommitting = true;
-      _showSuccess = false;
-      _totalToCommit = targets.length;
-      _currentCommit = 0;
-    });
-
-    for (var file in targets) {
-      await VaultService.encryptAndStoreSpecific(file);
-      if (await file.exists()) await file.delete(); 
-      setState(() => _currentCommit++);
-    }
-    
-    setState(() {
-      _isCommitting = false;
-      _showSuccess = true;
-      _stagedFiles.clear();
-      VaultService.clearStaging(); // 🔱 Clear service after commit
-    });
-
-    await Future.delayed(const Duration(milliseconds: 1800));
-    
-    if (mounted) {
-      setState(() => _showSuccess = false);
-      _refreshFiles();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Abyss Updated Successfully"), 
-          backgroundColor: Colors.green,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  // --- 🔱 UI COMPONENTS (UNCHANGED) ---
 
   Widget _buildStatsHeader() {
     return FutureBuilder<List<FileSystemEntity>>(
@@ -499,57 +448,44 @@ class _VaultDashboardState extends State<VaultDashboard> {
     );
   }
 
-  Widget _buildEncryptedThumbnail(File file) {
-    return SizedBox(
-      width: 45, height: 45,
-      child: FutureBuilder<Uint8List?>(
-        future: VaultService.decryptFileData(file),
-        builder: (context, snapshot) {
-          if (snapshot.hasData && snapshot.data != null) {
-            return ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.memory(snapshot.data!, fit: BoxFit.cover),
-            );
-          }
-          return const Icon(Icons.lock, color: NemoPalette.electricBlue, size: 20);
-        },
+  Widget _buildLoadingOverlay() {
+    double progress = _totalToCommit > 0 ? _currentCommit / _totalToCommit : 0;
+    return Container(
+      color: Colors.black.withOpacity(0.9),
+      child: Center(
+        child: _showSuccess ? _buildSuccessView() : _buildProgressView(progress),
       ),
     );
   }
 
-  void _showPreview(File file) async {
-    final bytes = await VaultService.decryptFileData(file);
-    if (bytes != null && mounted) {
-      showDialog(
-        context: context,
-        builder: (context) => Dialog(
-          backgroundColor: NemoPalette.deepOcean,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              AppBar(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                leading: const Icon(Icons.remove_red_eye, color: Colors.white38),
-                title: Text(p.basename(file.path), style: const TextStyle(fontSize: 14, color: Colors.white)),
-                actions: [IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.pop(context))],
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.6),
-                    child: Image.memory(bytes, fit: BoxFit.contain),
-                  ),
-                ),
-              ),
-            ],
-          ),
+  Widget _buildProgressView(double progress) {
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const CircularProgressIndicator(color: NemoPalette.electricBlue),
+        const SizedBox(height: 20),
+        Text("SECURING $_currentCommit / $_totalToCommit FILES", 
+          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Text(_currentlyProcessing, 
+          style: const TextStyle(color: Colors.white38, fontSize: 12)),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 20),
+          child: LinearProgressIndicator(value: progress, backgroundColor: Colors.white10, color: NemoPalette.electricBlue),
         ),
-      );
-    }
+      ],
+    );
+  }
+
+  Widget _buildSuccessView() {
+    return const Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(Icons.check_circle_outline, color: Colors.greenAccent, size: 80),
+        SizedBox(height: 20),
+        Text("ABYSS SEALED", style: TextStyle(color: Colors.white, letterSpacing: 2, fontSize: 18)),
+      ],
+    );
   }
 
   void _confirmDelete(File file) {
@@ -557,42 +493,21 @@ class _VaultDashboardState extends State<VaultDashboard> {
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: NemoPalette.systemSlate,
-        title: const Text("PURGE FILE?"),
-        content: const Text("This action is irreversible. The file will be deleted from the abyss."),
+        title: const Text("PURGE FILE?", style: TextStyle(color: Colors.white)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text("CANCEL")),
-          TextButton(
-            onPressed: () async {
-              await file.delete();
-              Navigator.pop(context);
-              _refreshFiles();
-            },
-            child: const Text("PURGE", style: TextStyle(color: Colors.redAccent)),
-          ),
+          TextButton(onPressed: () async { 
+            await file.delete(); 
+            Navigator.pop(context); 
+            _refreshFiles(); 
+          }, 
+            child: const Text("PURGE", style: TextStyle(color: Colors.redAccent))),
         ],
       ),
     );
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.shield_outlined, size: 80, color: NemoPalette.electricBlue.withOpacity(0.1)),
-          const SizedBox(height: 16),
-          const Text("THE ABYSS IS EMPTY", 
-            style: TextStyle(color: Colors.white24, letterSpacing: 2, fontSize: 12, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
-  Future<void> findMyPhotos() async {
-    final directory = await getApplicationDocumentsDirectory();
-    final files = directory.listSync();
-    for (var file in files) {
-      if (file.path.endsWith('.nemo')) debugPrint("✅ Found Encrypted File: ${file.path}");
-    }
+    return const Center(child: Text("THE ABYSS IS EMPTY", style: TextStyle(color: Colors.white24, letterSpacing: 2)));
   }
 }

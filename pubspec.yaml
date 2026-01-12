@@ -16,6 +16,7 @@ dependencies:
   flutter_secure_storage: ^9.2.2
   encrypt: ^5.0.3 
   crypto: ^3.0.6 
+  permission_handler: ^11.3.1
 
   # --- NEW: Auto-Lock & Privacy Plugins ---
   # Blurs the app in Android/iOS switcher and handles Windows focus

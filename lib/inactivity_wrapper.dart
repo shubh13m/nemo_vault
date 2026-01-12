@@ -2,14 +2,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'vault_service.dart';
 
-/// 🔱 Nemo Vault: Inactivity Wrapper (v5/5 Architecture)
+/// 🔱 Nemo Vault: Inactivity Wrapper (v5.1 Architecture)
 /// Monitors raw user interaction and OS-level suspension.
 /// 
 /// Satisfies:
 /// 1. 1-Minute Idle Lock: Seals vault after 60s of no input.
 /// 2. Background Awareness: Stops timer when app is fully minimized.
 /// 3. Focus-Smart: Prevents background mouse movement from resetting the timer.
-/// 4. Dialog Protection: Vetos lock if a File Picker or Biometric prompt is active.
+/// 4. Double-Veto Protection: Prevents lock if File Picker OR Background Encryption is active.
 class InactivityWrapper extends StatefulWidget {
   final Widget child;
   final VoidCallback onInactivity;
@@ -73,7 +73,6 @@ class _InactivityWrapperState extends State<InactivityWrapper> with WidgetsBindi
     // 🔱 SECURITY CHECK 2: FOCUS-SMART RESET
     // If the app is INACTIVE (e.g., Windows user is clicking a browser), 
     // hovering the mouse over the vault window should NOT reset the timer.
-    // This ensures that 'Focus Loss' eventually leads to a lock.
     if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.inactive) {
       return; 
     }
@@ -86,9 +85,14 @@ class _InactivityWrapperState extends State<InactivityWrapper> with WidgetsBindi
 
   void _startTimer() {
     _timer = Timer(widget.timeout, () {
-      // 🔱 SYSTEM DIALOG VETO: 
-      // Prevents locking while user is interacting with OS-level pickers.
-      if (!VaultService.isSystemDialogActive) {
+      
+      // 🔱 DOUBLE VETO LOGIC:
+      // 1. isSystemDialogActive: User is picking files or using Biometrics.
+      // 2. isProcessing: The Background Isolate is busy encrypting files.
+      final bool isSystemBusy = VaultService.isSystemDialogActive;
+      final bool isIsolateBusy = VaultService.isProcessing;
+
+      if (!isSystemBusy && !isIsolateBusy) {
         debugPrint("🔱 Nautilus Idle: 1-minute timeout reached. Executing Deep Seal.");
         
         // RAM WIPE: Immediately clear sensitive data from memory.
@@ -97,7 +101,11 @@ class _InactivityWrapperState extends State<InactivityWrapper> with WidgetsBindi
         // UI REDIRECT: Trigger the navigation logic defined in main.dart.
         widget.onInactivity();
       } else {
-        debugPrint("🔱 Nautilus Idle: Timeout reached, but Vetoed by System Dialog. Re-cycling.");
+        // Log the specific reason for the Veto
+        String reason = isIsolateBusy ? "Background Encryption" : "System Dialog";
+        debugPrint("🔱 Nautilus Idle: Timeout reached, but Vetoed by $reason. Re-cycling.");
+        
+        // Keep the app alive by restarting the timer loop
         _startTimer();
       }
     });
