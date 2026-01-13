@@ -8,6 +8,7 @@ import 'staged_item.dart';
 import 'vault_service.dart';
 
 /// 🔱 The Isolate Manager: The bridge between UI and the Background Worker.
+/// Updated to support the "Manual Purge" workflow by ensuring status synchronization.
 class IsolateManager {
   static Isolate? _workerIsolate;
   static SendPort? _sendPort;
@@ -111,6 +112,7 @@ class IsolateManager {
             });
 
             // Heavy computational work stays here
+            // We NO LONGER delete the file here to prevent PathNotFound errors.
             await VaultService.encryptAndStoreSpecific(item);
 
             mainSendPort.send({
@@ -132,7 +134,8 @@ class IsolateManager {
           'message': 'Critical Isolate Failure: ${globalError.toString()}'
         });
       } finally {
-        // 🔱 CRITICAL: Always signal end to prevent permanent Veto Lock
+        // 🔱 CRITICAL: Always signal end to release the Veto Lock
+        // This allows the UI to show the "Manual Purge" banner.
         mainSendPort.send({'status': 'batch_end'});
       }
     });

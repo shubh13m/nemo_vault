@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 
-// 🔱 Flattened Imports (Matches your /lib structure)
+// 🔱 Flattened Imports
 import 'vault_service.dart';
 import 'isolate_manager.dart';
 import 'staged_item.dart';
@@ -17,7 +17,6 @@ class VaultDashboard extends StatefulWidget {
   State<VaultDashboard> createState() => _VaultDashboardState();
 }
 
-/// 🔱 Added WidgetsBindingObserver to handle the Inactivity Lockout Fix
 class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObserver {
   late Future<List<FileSystemEntity>> _fileList = VaultService.listEncryptedFiles();
   final List<StagedItem> _stagedFiles = [];
@@ -32,7 +31,7 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this); // 🔱 Monitor App Lifecycle
+    WidgetsBinding.instance.addObserver(this); 
     _initVault();
   }
 
@@ -43,20 +42,14 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
     _refreshFiles();
   }
 
-  /// 🔱 VETO LOCK LOGIC: Synchronized with VaultService & InactivityWrapper
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     debugPrint("🔱 Dashboard Lifecycle: $state");
-    
-    // 🔱 Logic Barrier: If we are encrypting OR picking files, do NOT lock.
-    // We now check VaultService.isSystemDialogActive for the File Picker veto.
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       if (VaultService.isProcessing || VaultService.isSystemDialogActive) {
-        debugPrint("🔱 Security Bypass: Vetoing auto-lock (Processing: ${VaultService.isProcessing}, DialogActive: ${VaultService.isSystemDialogActive})");
+        debugPrint("🔱 Security Bypass: Vetoing auto-lock");
         return;
       }
-
-      // Standard Auto-Lock: Wipe RAM and navigate to Entry
       if (VaultService.isUnlocked()) {
         _forceLockout();
       }
@@ -81,7 +74,7 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this); // 🔱 Cleanup observer
+    WidgetsBinding.instance.removeObserver(this);
     _stagingScrollController.dispose();
     super.dispose();
   }
@@ -116,6 +109,7 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
 
         if (status == 'error') {
           debugPrint("🔱 Isolate Error: ${data['message']}");
+          _isCommitting = false; // Reset on error to prevent being stuck
         }
       });
     });
@@ -132,9 +126,7 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
     );
   }
 
-  /// 🔱 Updated to use the Global Veto Protection in VaultService
   void _pickFiles() async {
-    // 🔱 Raise the Veto flag BEFORE the OS dialog opens
     setState(() => VaultService.isSystemDialogActive = true); 
 
     try {
@@ -146,11 +138,9 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
         });
       }
     } finally {
-      // 🔱 Small delay allows the OS to fully return focus to the app 
-      // before we re-enable security lockout checks.
       await Future.delayed(const Duration(milliseconds: 600));
       if (mounted) {
-        setState(() => VaultService.isSystemDialogActive = false); // Lower Veto flag
+        setState(() => VaultService.isSystemDialogActive = false);
       }
     }
   }
@@ -169,7 +159,9 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
     IsolateManager.processVaultLock(_stagedFiles, VaultService.activeKey ?? "MEM_KEY_ACTIVE");
   }
 
+  /// 🔱 Logic Updated: Trigger the Manual Purge warning after success
   void _finalizeCommit() async {
+    final int count = _totalToCommit; // Capture count before clearing
     VaultService.clearStaging();
     
     setState(() {
@@ -179,12 +171,48 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
       _currentlyProcessing = "";
     });
 
+    // Wait for the success animation to finish
     await Future.delayed(const Duration(milliseconds: 1500));
     
     if (mounted) {
       setState(() => _showSuccess = false);
       _refreshFiles();
+      
+      // 🔱 New: Show the manual deletion warning
+      _showSecurityWarning(context, count);
     }
+  }
+
+  /// 🔱 New Implementation: Auto-fading security banner
+  void _showSecurityWarning(BuildContext context, int count) {
+    final String message = count == 1 
+        ? "File secured in Abyss. Manually delete the original file now."
+        : "$count files secured. Please manually delete the original sources.";
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.warning_amber_rounded, color: Colors.amber, size: 20),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w500),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFF1A1A1A),
+        duration: const Duration(seconds: 7), // Vanishes after 7 seconds
+        behavior: SnackBarBehavior.floating,
+        margin: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: Colors.amber.withOpacity(0.5), width: 1),
+        ),
+      ),
+    );
   }
 
   @override
@@ -227,8 +255,6 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
             ),
     );
   }
-
-  // --- UI COMPONENTS ---
 
   Widget _buildVaultList() {
     return FutureBuilder<List<FileSystemEntity>>(
