@@ -75,7 +75,6 @@ class _NemoAppState extends State<NemoApp> {
     VaultService.deepSeal();
     
     // 2. Check current route to prevent unnecessary "push" if already at Entry.
-    // We use navigatorKey to bypass context limitations in builder/observer.
     bool isAlreadyAtEntry = false;
     navigatorKey.currentState?.popUntil((route) {
       if (route.settings.name == 'entry') isAlreadyAtEntry = true;
@@ -127,12 +126,15 @@ class _VaultEntryState extends State<VaultEntry> {
   final LocalAuthentication auth = LocalAuthentication();
 
   Future<void> _unsealVault() async {
+    // 🔱 PRIORITY FIX: Raise flag SYNCHRONOUSLY before any async calls.
+    // This blocks the SessionObserver from firing deepSeal() if the OS 
+    // triggers an 'inactive' state while bringing up the biometric dialog.
+    VaultService.isSystemDialogActive = true;
+
     bool authenticated = false;
     try {
-      // 🔱 Raise flag to prevent locking during biometric dialog
-      VaultService.isSystemDialogActive = true;
-
-      await Future.delayed(const Duration(milliseconds: 100));
+      // Small buffer to ensure flag propagation before the native view takes over
+      await Future.delayed(const Duration(milliseconds: 50));
       
       authenticated = await auth.authenticate(
         localizedReason: 'Unsealing Nemo Vault',
@@ -144,7 +146,8 @@ class _VaultEntryState extends State<VaultEntry> {
     } catch (e) {
       debugPrint("Auth Error: $e");
     } finally {
-      // 🔱 Buffer allows biometric overlay to fully close before re-arming security
+      // 🔱 Buffer allows biometric overlay to fully close and the app 
+      // to return to 'resumed' state before we re-arm the security logic.
       await Future.delayed(const Duration(milliseconds: 800));
       VaultService.isSystemDialogActive = false;
     }

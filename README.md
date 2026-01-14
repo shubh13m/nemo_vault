@@ -45,7 +45,7 @@ Nemo Vault is a high-security privacy application built with **Flutter** for And
 * **[x] v2.3.0.0: Manual Purge Protocol & Security Advisory**
 * *Details:* A safety-first deletion protocol. This advisory instructs the user to manually delete the original unencrypted files
 
-* **[ ] v2.4.0.0: Separate Archive Panel**
+* **[x] v2.4.0.0: Separate Archive Panel**
 * *Details:* The "Gallery of Secrets." A secure viewing area where encrypted files are temporarily decrypted into memory for viewing.
 
 ### Major Release v3.0

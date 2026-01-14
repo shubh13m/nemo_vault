@@ -22,13 +22,14 @@ class StagedItem {
   String? errorMessage;
 
   /// 🔱 Primary Constructor: Used when files are first picked in the UI.
+  /// Fix: ID is now derived from the file path to prevent duplicate "Ghosts".
   StagedItem({
     required this.file,
     this.shouldStripMetadata = true, 
     this.status = StagingStatus.pending,
     this.progress = 0.0,
     this.errorMessage,
-  })  : id = DateTime.now().microsecondsSinceEpoch.toString(),
+  })  : id = file.path.hashCode.toString(), 
         fileName = p.basename(file.path),
         fileSize = file.existsSync() ? file.lengthSync() : 0,
         fileType = _determineFileType(file.path);
@@ -80,7 +81,7 @@ class StagedItem {
     final ext = p.extension(path).toLowerCase();
     const imageExtensions = {'.jpg', '.jpeg', '.png', '.webp', '.heic'};
     const videoExtensions = {'.mp4', '.mov', '.avi', '.mkv', '.wmv'};
-    const docExtensions = {'.pdf', '.docx', '.txt', '.xlsx', '.pptx'};
+    const docExtensions = {'.pdf', '.txt', '.doc', '.docx', '.xlsx', '.pptx'};
 
     if (imageExtensions.contains(ext)) return NemoFileType.image;
     if (videoExtensions.contains(ext)) return NemoFileType.video;
@@ -95,7 +96,7 @@ class StagedItem {
     return '${(fileSize / 1073741824).toStringAsFixed(1)} GB';
   }
 
-  /// 🔱 Updated copyWith: Removed unnecessary 'this.' qualifiers for properties that aren't shadowed.
+  /// 🔱 Updated copyWith: Maintained for clean state transitions.
   StagedItem copyWith({
     StagingStatus? status,
     double? progress,
@@ -114,4 +115,17 @@ class StagedItem {
       errorMessage: errorMessage ?? this.errorMessage,
     );
   }
+
+  // 🔱 EQUALITY OVERRIDES
+  // These ensure that the app treats two StagedItem objects as the same 
+  // if they point to the same physical file.
+  
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is StagedItem && other.id == id;
+  }
+
+  @override
+  int get hashCode => id.hashCode;
 }
