@@ -206,7 +206,7 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
         children: [
           Positioned(
             top: -100, right: -50,
-            child: CircleAvatar(radius: 150, backgroundColor: NemoPalette.electricBlue.withOpacity(0.1)),
+            child: CircleAvatar(radius: 150, backgroundColor: NemoPalette.electricBlue.withValues(alpha: 0.1)),
           ),
           Center(
             child: SingleChildScrollView(
@@ -218,9 +218,9 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                   child: Container(
                     padding: const EdgeInsets.all(25),
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.05),
+                      color: Colors.white.withValues(alpha: 0.05),
                       borderRadius: BorderRadius.circular(25),
-                      border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                     ),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,

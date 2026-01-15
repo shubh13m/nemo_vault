@@ -188,7 +188,7 @@ class _ArchivePanelState extends State<ArchivePanel> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.inventory_2_outlined, size: 64, color: Colors.white.withOpacity(0.05)),
+                Icon(Icons.inventory_2_outlined, size: 64, color: Colors.white.withValues(alpha: 0.05)),
                 const SizedBox(height: 16),
                 const Text("CARGO HOLD EMPTY", style: TextStyle(color: Colors.white24, letterSpacing: 1.5, fontSize: 12)),
               ],

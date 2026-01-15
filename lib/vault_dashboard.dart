@@ -185,9 +185,9 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
             decoration: BoxDecoration(
-              color: Colors.amber[900]?.withOpacity(0.9),
+              color: Colors.amber[900]?.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.white24),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.24)),
               boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 10, offset: Offset(0, 4))],
             ),
             child: Row(
@@ -459,7 +459,7 @@ Widget _buildCustomAppBar() {
             value: _stagedFiles.isNotEmpty && _stagedFiles.first.shouldStripMetadata,
             onChanged: (val) => setState(() { for (var item in _stagedFiles) { item.shouldStripMetadata = val; } }),
             activeThumbColor: NemoPalette.electricBlue,
-            activeTrackColor: NemoPalette.electricBlue.withOpacity(0.3),
+            activeTrackColor: NemoPalette.electricBlue.withValues(alpha: 0.3),
           ),
         ),
       ],
