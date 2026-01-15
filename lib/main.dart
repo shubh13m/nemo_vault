@@ -12,11 +12,12 @@ import 'package:window_manager/window_manager.dart';
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class NemoPalette {
-  static const Color electricBlue = Color(0xFF4DB6FF);
-  static const Color systemSlate = Color(0xFF2F3942);
-  static const Color pureWhite = Colors.white;
-  static const Color deepOcean = Color(0xFF1C2B35);
 
+  static const Color electricBlue = Color(0xFF00E5FF); // Vibrant Cyan
+  static const Color systemSlate = Color(0xFF172A45);  // Midnight Steel
+  static const Color pureWhite = Color(0xFFE6F1FF);    // Frost Tinted White
+  static const Color deepOcean = Color(0xFF0A192F);    // Deep Space Navy
+  
   static ThemeData get theme => ThemeData(
         useMaterial3: true,
         brightness: Brightness.dark,
