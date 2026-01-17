@@ -1,3 +1,4 @@
+// ... existing imports ...
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -17,13 +18,11 @@ class VaultDashboard extends StatefulWidget {
 }
 
 class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObserver {
+  // ... all existing state variables ...
   late Future<List<FileSystemEntity>> _fileList = VaultService.listEncryptedFiles();
   final List<StagedItem> _stagedFiles = [];
   final ScrollController _stagingScrollController = ScrollController();
-
-  // 🔱 Trigger key to force FutureBuilder refresh
   Key _statsKey = UniqueKey();
-
   bool _isCommitting = false;
   bool _showSuccess = false;
   int _totalToCommit = 0;
@@ -38,34 +37,30 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
     _initVault();
   }
 
+  // ... _initVault, didChangeAppLifecycleState, _updateStagedList, _forceLockout, _checkPermissions methods ...
   void _initVault() async {
     await IsolateManager.start();
     _checkPermissions();
     _listenToProgress();
     _refreshFiles();
-    _updateStagedList(); // Initial sync
+    _updateStagedList();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // 🔱 PHYSICAL SYNC: If we resume and files were purged by auto-lock/background logic, 
-      // refresh the list immediately to remove black boxes.
       _updateStagedList();
     }
-
     if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused) {
       if (VaultService.isProcessing || VaultService.isSystemDialogActive) return;
       if (VaultService.isUnlocked()) _forceLockout();
     }
   }
 
-  /// 🔱 Reality Filter: Ensures UI only holds items that actually exist on disk
   void _updateStagedList() {
     if (!mounted) return;
     setState(() {
       _stagedFiles.clear();
-      // Only add items if the physical file is still in staging_internal
       _stagedFiles.addAll(
         VaultService.stagingArea.where((item) => item.file.existsSync())
       );
@@ -91,6 +86,7 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
     super.dispose();
   }
 
+  // ... _refreshFiles, _listenToProgress, _scrollStagingArea, _pickFiles, _handleVaultLock, _finalizeCommit, _showAbyssToast, _openArchive, _updateDashboardStats methods ...
   void _refreshFiles() {
     setState(() {
       _statsKey = UniqueKey(); 
@@ -103,7 +99,6 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
       if (!mounted) return;
       final String? id = data['id'];
       final String? status = data['status'];
-      
       setState(() {
         if (status == 'encrypting' && id != null) {
           if (_stagedFiles.any((e) => e.id == id)) {
@@ -143,10 +138,8 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
   }
 
   Future<void> _handleVaultLock() async {
-    // 🔱 Re-verify list before locking to skip ghosts
     _updateStagedList();
     if (_stagedFiles.isEmpty) return;
-
     setState(() {
       _isCommitting = true;
       _showSuccess = false;
@@ -206,7 +199,6 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
         ),
       ),
     );
-
     overlay.insert(overlayEntry);
     Future.delayed(const Duration(seconds: 4), () => overlayEntry.remove());
   }
@@ -226,9 +218,13 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
   }
 
   void _updateDashboardStats() {
-    setState(() {
-      _statsKey = UniqueKey();
-      _fileList = VaultService.listEncryptedFiles();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        setState(() {
+          _statsKey = UniqueKey();
+          _fileList = VaultService.listEncryptedFiles();
+        });
+      }
     });
   }
 
@@ -239,6 +235,16 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
       body: Stack(
         alignment: Alignment.center,
         children: [
+          // 🔱 ADDED: Ambient Glow Background Styling
+          Positioned(
+            top: -100,
+            right: -50,
+            child: CircleAvatar(
+              radius: 150,
+              backgroundColor: NemoPalette.electricBlue.withValues(alpha: 0.1),
+            ),
+          ),
+
           SafeArea(
             child: Column(
               children: [
@@ -260,7 +266,8 @@ class _VaultDashboardState extends State<VaultDashboard> with WidgetsBindingObse
     );
   }
 
-Widget _buildCustomAppBar() {
+  // ... all other _build helper methods remain identical ...
+  Widget _buildCustomAppBar() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
@@ -268,14 +275,11 @@ Widget _buildCustomAppBar() {
         children: [
           Row(
             children: [
-              // 🔱 Custom Shield Asset replacement
               Image.asset(
                 'assets/images/shield.png',
                 width: 48,
                 height: 48,
                 fit: BoxFit.contain,
-                // Optional: If your png is white/grayscale and you want to keep the electricBlue theme
-                // color: NemoPalette.electricBlue, 
               ),
               const SizedBox(width: 12),
               const Text(
@@ -374,7 +378,6 @@ Widget _buildCustomAppBar() {
                       itemCount: _stagedFiles.length,
                       itemBuilder: (context, index) {
                         final item = _stagedFiles[index];
-                        // 🔱 GHOST SHIELD: Double-check physical presence before building the card
                         if (!item.file.existsSync()) {
                            return const SizedBox.shrink();
                         }
@@ -418,7 +421,6 @@ Widget _buildCustomAppBar() {
             right: 5, 
             child: GestureDetector(
               onTap: () {
-                // 🔱 ATOMIC FIX: Remove from service (Physical) then refresh UI (RAM)
                 VaultService.removeFromStaging(item); 
                 _updateStagedList();
               },
@@ -435,7 +437,6 @@ Widget _buildCustomAppBar() {
   }
 
   Widget _buildTypeSpecificPreview(StagedItem item) {
-    // 🔱 Check if file is still there before trying to build a preview
     if (item.fileType == NemoFileType.image && item.file.existsSync()) {
       return ClipRRect(
         borderRadius: const BorderRadius.vertical(top: Radius.circular(12)), 
@@ -496,7 +497,7 @@ Widget _buildCustomAppBar() {
       decoration: BoxDecoration(
         color: NemoPalette.deepOcean.withAlpha(242),
         borderRadius: BorderRadius.circular(40),
-        border: Border.all(color: Colors.white10),
+        border: Border.all(color: NemoPalette.electricBlue.withAlpha(51)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -530,7 +531,6 @@ Widget _buildCustomAppBar() {
 
   Widget _buildLoadingOverlay() {
     double progress = _totalToCommit > 0 ? _currentCommit / _totalToCommit : 0.0;
-
     return Container(
       color: Colors.black.withAlpha(230),
       child: Center(

@@ -314,9 +314,10 @@ class _PassphraseScreenState extends State<PassphraseScreen> {
                               ? (widget.isSetup ? "CREATE VAULT" : "OPEN VAULT") 
                               : "RETRY IN ${_formatDuration(_lockoutRemaining)}",
                             style: TextStyle(
-                              color: isUIEnabled ? Colors.black : Colors.white24, 
+                              color: isUIEnabled ? NemoPalette.systemSlate : Colors.white24, 
                               fontWeight: FontWeight.bold, 
-                              fontSize: 16
+                              fontSize: 16,
+                              letterSpacing: 1.2,
                             ),
                           ),
                         ),

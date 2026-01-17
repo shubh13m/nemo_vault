@@ -6,9 +6,7 @@ import 'main.dart';
 import 'secure_viewer.dart';
 
 class ArchivePanel extends StatefulWidget {
-  // 🔱 Added callback to notify Dashboard of changes
   final VoidCallback onContentChanged;
-
   const ArchivePanel({super.key, required this.onContentChanged});
 
   @override
@@ -35,11 +33,14 @@ class _ArchivePanelState extends State<ArchivePanel> {
       _isSelectionMode = false;
       _vaultFiles = VaultService.listEncryptedFiles();
     });
-    // 🔱 Notify dashboard in case external file changes occurred
-    widget.onContentChanged();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        widget.onContentChanged();
+      }
+    });
   }
 
-  // 🔱 Filter Logic
   bool _matchesFilter(String fileName) {
     if (_activeFilter == "ALL") return true;
     final ext = fileName.split('.').last.toLowerCase();
@@ -53,7 +54,7 @@ class _ArchivePanelState extends State<ArchivePanel> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: NemoPalette.deepOcean,
+        backgroundColor: NemoPalette.systemSlate,
         title: const Text("PERMANENT WIPE", style: TextStyle(color: Colors.redAccent, letterSpacing: 2)),
         content: Text("Are you sure you want to delete ${paths.length} items? This cannot be undone.", style: const TextStyle(color: Colors.white70)),
         actions: [
@@ -69,14 +70,14 @@ class _ArchivePanelState extends State<ArchivePanel> {
 
     if (confirmed == true) {
       for (var path in paths) {
-        // 🔱 Using centralized secure delete from VaultService
         await VaultService.secureDeleteFile(path);
       }
-      
       _refreshArchive();
-      
-      // 🔱 Notify Dashboard to update "Total Secured" stats
-      widget.onContentChanged();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          widget.onContentChanged();
+        }
+      });
     }
   }
 
@@ -90,10 +91,8 @@ class _ArchivePanelState extends State<ArchivePanel> {
     try {
       final String? key = VaultService.activeKey;
       if (key == null) throw Exception("Vault Locked");
-
       final bytes = await IsolateManager.decryptFileOnDemand(file, key);
       if (mounted) Navigator.pop(context);
-
       if (bytes != null && mounted) {
         await Navigator.push(
           context,
@@ -119,7 +118,8 @@ class _ArchivePanelState extends State<ArchivePanel> {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: NemoPalette.deepOcean.withValues(alpha: 0.98),
+        // 🔱 Mod: Background now matches the main Vault background
+        color: NemoPalette.systemSlate,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
       ),
       child: Column(
@@ -167,6 +167,8 @@ class _ArchivePanelState extends State<ArchivePanel> {
             backgroundColor: Colors.white10,
             selectedColor: NemoPalette.electricBlue,
             showCheckmark: false,
+            // 🔱 Mod: Filter side border to match staging area
+            side: BorderSide(color: _activeFilter == f ? NemoPalette.electricBlue : Colors.white.withValues(alpha: 0.1)),
           ),
         )).toList(),
       ),
@@ -212,9 +214,13 @@ class _ArchivePanelState extends State<ArchivePanel> {
               child: Container(
                 margin: const EdgeInsets.only(bottom: 10),
                 decoration: BoxDecoration(
-                  color: isSelected ? NemoPalette.electricBlue.withValues(alpha: 0.1) : Colors.white.withValues(alpha: 0.03),
+                  // 🔱 Mod: Background now matches staging area (deepOcean with alpha 204)
+                  color: isSelected 
+                      ? NemoPalette.electricBlue.withValues(alpha: 0.1) 
+                      : NemoPalette.deepOcean.withAlpha(204),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: isSelected ? NemoPalette.electricBlue : Colors.white10),
+                  // 🔱 Mod: Border color now matches staging area
+                  border: Border.all(color: isSelected ? NemoPalette.electricBlue : Colors.white.withValues(alpha: 0.1)),
                 ),
                 child: ListTile(
                   onTap: _isSelectionMode ? () => setState(() => isSelected ? _selectedPaths.remove(file.path) : _selectedPaths.add(file.path)) : null,

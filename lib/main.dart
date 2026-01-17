@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui'; // Required for ImageFilter
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'auth_service.dart';
@@ -8,15 +9,13 @@ import 'session_observer.dart';
 import 'vault_service.dart';
 import 'package:window_manager/window_manager.dart';
 
-// --- Global Navigator Key for forced redirection ---
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 class NemoPalette {
-
-  static const Color electricBlue = Color(0xFF00E5FF); // Vibrant Cyan
-  static const Color systemSlate = Color(0xFF172A45);  // Midnight Steel
-  static const Color pureWhite = Color(0xFFE6F1FF);    // Frost Tinted White
-  static const Color deepOcean = Color(0xFF0A192F);    // Deep Space Navy
+  static const Color electricBlue = Color(0xFF00E5FF);
+  static const Color systemSlate = Color(0xFF172A45);
+  static const Color pureWhite = Color(0xFFE6F1FF);
+  static const Color deepOcean = Color(0xFF0A192F);
   
   static ThemeData get theme => ThemeData(
         useMaterial3: true,
@@ -33,12 +32,9 @@ class NemoPalette {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  // 🔱 Initialize Window Manager for Condition 5 (Windows Minimize)
   if (Platform.isWindows) {
     await windowManager.ensureInitialized();
   }
-  
   runApp(const NemoApp());
 }
 
@@ -55,7 +51,6 @@ class _NemoAppState extends State<NemoApp> {
   @override
   void initState() {
     super.initState();
-    // 🔱 The observer triggers _sealVault on Pause/Hide/Minimize
     _sessionObserver = SessionObserver(onTriggerSeal: _sealVault);
     WidgetsBinding.instance.addObserver(_sessionObserver);
   }
@@ -63,19 +58,12 @@ class _NemoAppState extends State<NemoApp> {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(_sessionObserver);
-    // 🔱 Clean up native Windows listeners
     _sessionObserver.dispose();
     super.dispose();
   }
 
-  /// 🔱 THE MASTER SEAL: Forces UI reset and RAM purge.
   void _sealVault() {
-    debugPrint("🔱 Nemo Vault: Master Seal Triggered. Redirection sequence started.");
-
-    // 1. Wipe RAM Keys and Staging Area (Idempotent: safe to call multiple times)
     VaultService.deepSeal();
-    
-    // 2. Check current route to prevent unnecessary "push" if already at Entry.
     bool isAlreadyAtEntry = false;
     navigatorKey.currentState?.popUntil((route) {
       if (route.settings.name == 'entry') isAlreadyAtEntry = true;
@@ -83,13 +71,7 @@ class _NemoAppState extends State<NemoApp> {
     });
 
     if (!isAlreadyAtEntry) {
-      debugPrint("🔱 Nemo Vault: Redirecting to Entry Screen.");
-      navigatorKey.currentState?.pushNamedAndRemoveUntil(
-        'entry', 
-        (route) => false,
-      );
-    } else {
-      debugPrint("🔱 Nemo Vault: Already at Entry. Skipping navigation.");
+      navigatorKey.currentState?.pushNamedAndRemoveUntil('entry', (route) => false);
     }
   }
 
@@ -100,7 +82,6 @@ class _NemoAppState extends State<NemoApp> {
       debugShowCheckedModeBanner: false,
       title: 'Nemo Vault',
       theme: NemoPalette.theme,
-      // 🔱 THE WRAPPER: Handles the 1-minute idle countdown
       builder: (context, child) {
         return InactivityWrapper(
           onInactivity: _sealVault,
@@ -127,16 +108,10 @@ class _VaultEntryState extends State<VaultEntry> {
   final LocalAuthentication auth = LocalAuthentication();
 
   Future<void> _unsealVault() async {
-    // 🔱 PRIORITY FIX: Raise flag SYNCHRONOUSLY before any async calls.
-    // This blocks the SessionObserver from firing deepSeal() if the OS 
-    // triggers an 'inactive' state while bringing up the biometric dialog.
     VaultService.isSystemDialogActive = true;
-
     bool authenticated = false;
     try {
-      // Small buffer to ensure flag propagation before the native view takes over
       await Future.delayed(const Duration(milliseconds: 50));
-      
       authenticated = await auth.authenticate(
         localizedReason: 'Unsealing Nemo Vault',
         options: const AuthenticationOptions(
@@ -147,8 +122,6 @@ class _VaultEntryState extends State<VaultEntry> {
     } catch (e) {
       debugPrint("Auth Error: $e");
     } finally {
-      // 🔱 Buffer allows biometric overlay to fully close and the app 
-      // to return to 'resumed' state before we re-arm the security logic.
       await Future.delayed(const Duration(milliseconds: 800));
       VaultService.isSystemDialogActive = false;
     }
@@ -173,51 +146,84 @@ class _VaultEntryState extends State<VaultEntry> {
     final double screenWidth = MediaQuery.of(context).size.width;
 
     return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: screenHeight * 0.40, 
-                maxWidth: screenWidth * 0.8,
-              ),
-              child: Image.asset(
-                'assets/images/logo.png',
-                fit: BoxFit.contain,
-                errorBuilder: (context, error, stackTrace) {
-                  return const Icon(
-                    Icons.tsunami,
-                    size: 150,
-                    color: NemoPalette.electricBlue,
-                  );
-                },
-              ),
+      body: Stack(
+        children: [
+          // 1. Ambient Glow Styling
+          Positioned(
+            top: -100,
+            right: -50,
+            child: CircleAvatar(
+              radius: 150,
+              backgroundColor: NemoPalette.electricBlue.withValues(alpha: 0.1),
             ),
-            const SizedBox(height: 50),
-            SizedBox(
-              width: 220,
-              height: 54,
-              child: ElevatedButton(
-                onPressed: _unsealVault,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: NemoPalette.electricBlue,
-                  foregroundColor: NemoPalette.systemSlate,
-                  elevation: 3,
-                  shape: const StadiumBorder(),
-                ),
-                child: const Text(
-                  "ACCESS VAULT",
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    letterSpacing: 1.2,
+          ),
+          
+          Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(30),
+              // 2. Glassmorphism Styling
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(25),
+                child: BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 50, horizontal: 30),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(25),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min, // Keep it tight inside the glass box
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: screenHeight * 0.25, 
+                            maxWidth: screenWidth * 0.5,
+                          ),
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) {
+                              return const Icon(
+                                Icons.tsunami,
+                                size: 120,
+                                color: NemoPalette.electricBlue,
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 50),
+                        SizedBox(
+                          width: 220,
+                          height: 54,
+                          child: ElevatedButton(
+                            onPressed: _unsealVault,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: NemoPalette.electricBlue,
+                              foregroundColor: NemoPalette.systemSlate,
+                              elevation: 3,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                            ),
+                            child: const Text(
+                              "ACCESS VAULT",
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
